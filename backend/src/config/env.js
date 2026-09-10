@@ -21,7 +21,7 @@ const toNumber = (value, fallback) => {
 };
 
 const toBoolean = (value, fallback = false) => {
-  if (value === undefined) return fallback;
+  if (value === undefined || value === '') return fallback;
   return ['1', 'true', 'yes', 'on'].includes(String(value).toLowerCase());
 };
 
@@ -37,9 +37,24 @@ export const env = {
     .map((origin) => origin.trim())
     .filter(Boolean),
 
-  mongoUri: read('MONGODB_URI', 'mongodb://127.0.0.1:27017/vasudha_datavis', {
-    required: true,
-  }),
+  /**
+   * MySQL connection. `DATABASE_URL` wins when present, because most hosting
+   * providers hand out a single connection string.
+   */
+  db: {
+    url: read('DATABASE_URL', ''),
+    host: read('DB_HOST', '127.0.0.1'),
+    port: toNumber(read('DB_PORT', 3306), 3306),
+    name: read('DB_NAME', 'vasudha_datavis'),
+    user: read('DB_USER', 'root'),
+    password: read('DB_PASSWORD', ''),
+    ssl: toBoolean(read('DB_SSL', 'false')),
+    sslRejectUnauthorized: toBoolean(read('DB_SSL_REJECT_UNAUTHORIZED', 'true'), true),
+    poolMax: toNumber(read('DB_POOL_MAX', 10), 10),
+    poolMin: toNumber(read('DB_POOL_MIN', 0), 0),
+    logging: toBoolean(read('DB_LOGGING', 'false')),
+    sync: toBoolean(read('DB_SYNC', 'true'), true),
+  },
 
   jwtSecret: read('JWT_SECRET', 'insecure-development-secret', { required: true }),
   jwtExpiresIn: read('JWT_EXPIRES_IN', '7d'),
@@ -53,6 +68,12 @@ export const env = {
 
   maxUploadBytes: toNumber(read('MAX_UPLOAD_BYTES', 5 * 1024 * 1024), 5 * 1024 * 1024),
   maxDatasetRows: toNumber(read('MAX_DATASET_ROWS', 20000), 20000),
+
+  /** Throttling for the credential endpoints (login, forgot/reset password). */
+  authRateLimit: {
+    windowMinutes: toNumber(read('AUTH_RATE_LIMIT_WINDOW_MINUTES', 15), 15),
+    max: toNumber(read('AUTH_RATE_LIMIT_MAX', 20), 20),
+  },
 
   frontendUrl: read('FRONTEND_URL', 'http://localhost:5173').replace(/\/$/, ''),
 
