@@ -1,0 +1,42 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    @apply bg-slate-50 text-slate-900 antialiased;
+  }
+
+  :focus-visible {
+    @apply outline-2 outline-offset-2 outline-brand-600;
+  }
+}
+
+@layer components {
+  /* Leaflet renders its own DOM, so its chrome is themed here rather than
+     through utility classes on React elements. */
+  .leaflet-container {
+    @apply font-sans;
+  }
+
+  .leaflet-popup-content-wrapper,
+  .leaflet-popup-tip {
+    @apply rounded-lg shadow-lg;
+  }
+
+  .leaflet-popup-content {
+    @apply m-0 px-3 py-2;
+  }
+
+  .heatmap-tooltip {
+    @apply rounded-lg border-0 bg-white/95 px-2.5 py-1.5 text-xs shadow-lg;
+  }
+
+  .leaflet-control-attribution {
+    @apply text-[10px];
+  }
+}
