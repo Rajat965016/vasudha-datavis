@@ -1,12 +1,21 @@
 import createApp from './app.js';
 import env from './config/env.js';
 import { connectDatabase } from './config/db.js';
+import { syncDatabase } from './models/index.js';
 import { ensureSuperAdmin } from './seed/ensureSuperAdmin.js';
 import logger from './utils/logger.js';
 
 const start = async () => {
   try {
     await connectDatabase();
+
+    // Creates any missing tables. Disable with DB_SYNC=false once the schema
+    // is managed elsewhere (database/schema.sql or a migration tool).
+    if (env.db.sync) {
+      await syncDatabase();
+      logger.info('Database schema verified');
+    }
+
     // Guarantees the default Super Admin exists on every deployment.
     await ensureSuperAdmin();
 

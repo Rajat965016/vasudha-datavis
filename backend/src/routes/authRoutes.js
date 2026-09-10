@@ -1,6 +1,8 @@
 import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
 
+import env from '../config/env.js';
+
 import {
   changePassword,
   forgotPassword,
@@ -19,10 +21,13 @@ import {
 
 const router = Router();
 
-/** Throttles credential guessing without affecting normal use. */
+/**
+ * Throttles credential guessing without affecting normal use. The limits are
+ * configurable so an automated test run does not have to fight the throttle.
+ */
 const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  limit: 20,
+  windowMs: env.authRateLimit.windowMinutes * 60 * 1000,
+  limit: env.authRateLimit.max,
   standardHeaders: 'draft-7',
   legacyHeaders: false,
   message: { success: false, message: 'Too many attempts. Please try again in a few minutes.' },
