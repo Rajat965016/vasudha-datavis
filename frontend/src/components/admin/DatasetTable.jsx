@@ -66,7 +66,7 @@ const DatasetTable = ({
 
         <tbody className="divide-y divide-slate-100">
           {datasets.map((dataset) => {
-            const id = dataset._id ?? dataset.id;
+            const id = dataset.id;
             const isBusy = busyId === id;
 
             return (

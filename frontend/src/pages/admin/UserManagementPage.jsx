@@ -100,9 +100,9 @@ const UserManagementPage = () => {
   };
 
   const handleToggleActive = async (admin) => {
-    setBusyId(admin._id ?? admin.id);
+    setBusyId(admin.id);
     try {
-      const response = await adminApi.update(admin._id ?? admin.id, { isActive: !admin.isActive });
+      const response = await adminApi.update(admin.id, { isActive: !admin.isActive });
       toast.success(response.message);
       await reload();
     } catch (apiError) {
@@ -113,9 +113,9 @@ const UserManagementPage = () => {
   };
 
   const handleResetPassword = async (admin) => {
-    setBusyId(admin._id ?? admin.id);
+    setBusyId(admin.id);
     try {
-      const response = await adminApi.resetPassword(admin._id ?? admin.id, {
+      const response = await adminApi.resetPassword(admin.id, {
         sendCredentialsEmail: true,
       });
       toast.success(response.message);
@@ -129,7 +129,7 @@ const UserManagementPage = () => {
   };
 
   const handleDelete = async () => {
-    const id = pendingDelete._id ?? pendingDelete.id;
+    const id = pendingDelete.id;
     setBusyId(id);
     try {
       const response = await adminApi.remove(id);
@@ -188,7 +188,7 @@ const UserManagementPage = () => {
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {admins.map((admin) => {
-                  const id = admin._id ?? admin.id;
+                  const id = admin.id;
                   const isBusy = busyId === id;
                   const counts = admin.datasetCounts ?? {};
 

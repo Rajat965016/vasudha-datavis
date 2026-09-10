@@ -39,7 +39,7 @@ const ApprovalsPage = () => {
   const refresh = () => Promise.all([reload(), reloadStats()]);
 
   const handleApprove = async (dataset) => {
-    const id = dataset._id ?? dataset.id;
+    const id = dataset.id;
     setBusyId(id);
     try {
       const response = await datasetApi.approve(id);
@@ -53,7 +53,7 @@ const ApprovalsPage = () => {
   };
 
   const handleReject = async () => {
-    const id = rejecting._id ?? rejecting.id;
+    const id = rejecting.id;
     setBusyId(id);
     try {
       const response = await datasetApi.reject(id, rejectionReason);
@@ -70,7 +70,7 @@ const ApprovalsPage = () => {
 
   /** The list endpoint omits rows for speed, so fetch the full record to preview. */
   const openPreview = async (dataset) => {
-    const id = dataset._id ?? dataset.id;
+    const id = dataset.id;
     setIsLoadingPreview(true);
     setPreviewing({ ...dataset, rows: [] });
     try {
@@ -143,7 +143,7 @@ const ApprovalsPage = () => {
             <div className="mt-3 flex flex-wrap gap-2">
               {datasets.map((dataset) => (
                 <Button
-                  key={dataset._id ?? dataset.id}
+                  key={dataset.id}
                   size="sm"
                   variant="secondary"
                   onClick={() => openPreview(dataset)}

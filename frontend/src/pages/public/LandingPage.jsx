@@ -85,7 +85,7 @@ const LandingPage = () => {
           {!isLoading && !error && items.length > 0 && (
             <div className="grid items-start gap-6 xl:grid-cols-2">
               {items.map((dataset) => (
-                <VisualisationCard key={dataset._id ?? dataset.id} dataset={dataset} />
+                <VisualisationCard key={dataset.id} dataset={dataset} />
               ))}
             </div>
           )}

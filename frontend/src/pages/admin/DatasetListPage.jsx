@@ -52,7 +52,7 @@ const DatasetListPage = () => {
   };
 
   const handleDelete = async () => {
-    const id = pendingDelete._id ?? pendingDelete.id;
+    const id = pendingDelete.id;
     setBusyId(id);
     try {
       const response = await datasetApi.remove(id);
