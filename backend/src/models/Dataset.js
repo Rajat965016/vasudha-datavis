@@ -1,5 +1,6 @@
-import mongoose from 'mongoose';
+import { DataTypes, Model } from 'sequelize';
 
+import sequelize from '../config/db.js';
 import {
   CHART_TYPES,
   CHART_TYPE_VALUES,
@@ -10,122 +11,136 @@ import {
 } from '../config/constants.js';
 
 /**
- * Describes one column of the uploaded CSV so the frontend can render axes,
- * tooltips and tables without knowing anything about the specific dataset.
+ * MySQL's JSON columns come back parsed on MySQL 8 but as a string on MariaDB
+ * (where JSON is an alias for LONGTEXT). This getter normalises both.
  */
-const columnSchema = new mongoose.Schema(
-  {
-    /** Key used inside every `rows` object. */
-    key: { type: String, required: true },
-    /** Original header text from the CSV. */
-    sourceHeader: { type: String, required: true },
-    /** Human friendly label shown in the UI. */
-    label: { type: String, required: true },
-    /** `number` | `string` | `date` */
-    type: { type: String, required: true },
-    /** `category` (x-axis / dimension) or `measure` (y-axis / value). */
-    role: { type: String, default: 'meta' },
-  },
-  { _id: false },
-);
+const jsonGetter = (field, fallback) =>
+  function get() {
+    const raw = this.getDataValue(field);
+    if (raw === null || raw === undefined) return fallback;
+    if (typeof raw !== 'string') return raw;
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return fallback;
+    }
+  };
 
-const datasetSchema = new mongoose.Schema(
+class Dataset extends Model {
+  get isPublished() {
+    return this.status === DATASET_STATUS.APPROVED;
+  }
+
+  /** Effective visualisation key, e.g. `TIME_SERIES:LINE` or `STATE_HEATMAP`. */
+  get visualisationKey() {
+    return this.chartType === CHART_TYPES.TIME_SERIES && this.chartVariant
+      ? `${this.chartType}:${this.chartVariant}`
+      : this.chartType;
+  }
+
+  toJSON() {
+    const values = { ...this.get() };
+    values.isPublished = this.status === DATASET_STATUS.APPROVED;
+    values.visualisationKey = this.visualisationKey;
+    // `rows` is attached by the service layer when a caller needs the data.
+    if (this.dataValues.rows !== undefined) values.rows = this.dataValues.rows;
+    return values;
+  }
+}
+
+Dataset.init(
   {
-    title: {
-      type: String,
-      required: [true, 'Chart title is required'],
-      trim: true,
-      maxlength: 160,
+    id: {
+      type: DataTypes.INTEGER.UNSIGNED,
+      autoIncrement: true,
+      primaryKey: true,
     },
-    description: { type: String, trim: true, maxlength: 1000, default: '' },
-
+    title: {
+      type: DataTypes.STRING(160),
+      allowNull: false,
+      validate: { notEmpty: { msg: 'Chart title is required' } },
+    },
+    description: {
+      type: DataTypes.STRING(1000),
+      allowNull: false,
+      defaultValue: '',
+    },
     domain: {
-      type: String,
-      enum: DOMAIN_VALUES,
-      required: true,
-      index: true,
+      type: DataTypes.ENUM(...DOMAIN_VALUES),
+      allowNull: false,
     },
     chartType: {
-      type: String,
-      enum: CHART_TYPE_VALUES,
-      required: true,
+      type: DataTypes.ENUM(...CHART_TYPE_VALUES),
+      allowNull: false,
     },
-    /** Only used when `chartType === TIME_SERIES`. */
+    /** Only meaningful when `chartType === TIME_SERIES`. */
     chartVariant: {
-      type: String,
-      enum: [...CHART_VARIANT_VALUES, null],
-      default: null,
+      type: DataTypes.ENUM(...CHART_VARIANT_VALUES),
+      allowNull: true,
+      defaultValue: null,
     },
-
-    /** Optional unit shown on the value axis / in tooltips, e.g. "MW", "°C". */
-    valueUnit: { type: String, trim: true, maxlength: 32, default: '' },
-
-    columns: { type: [columnSchema], default: [] },
-    /** Normalised, validated CSV rows. Mixed so any extra column survives. */
-    rows: { type: [mongoose.Schema.Types.Mixed], default: [] },
-    rowCount: { type: Number, default: 0 },
-
-    sourceFileName: { type: String, default: '' },
-
-    status: {
-      type: String,
-      enum: DATASET_STATUS_VALUES,
-      default: DATASET_STATUS.PENDING,
-      index: true,
+    /** Optional unit shown on the value axis and in tooltips, e.g. "MW". */
+    valueUnit: {
+      type: DataTypes.STRING(32),
+      allowNull: false,
+      defaultValue: '',
     },
-    rejectionReason: { type: String, trim: true, maxlength: 500, default: '' },
-
-    createdBy: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'User',
-      required: true,
-      index: true,
-    },
-    updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
-    reviewedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
-    reviewedAt: { type: Date, default: null },
-
-    /** Timestamp of the approval that published this dataset. */
-    publishedAt: { type: Date, default: null },
     /**
-     * Monotonically increasing publish counter. The public landing page orders
-     * by this field so charts appear in the exact sequence they were approved.
+     * Column metadata describing the uploaded CSV: key, source header, label,
+     * type and role. Stored as JSON because the shape differs per chart type.
      */
-    publishSequence: { type: Number, default: null, index: true },
+    columns: {
+      type: DataTypes.JSON,
+      allowNull: false,
+      defaultValue: [],
+      get: jsonGetter('columns', []),
+    },
+    rowCount: {
+      type: DataTypes.INTEGER.UNSIGNED,
+      allowNull: false,
+      defaultValue: 0,
+    },
+    sourceFileName: {
+      type: DataTypes.STRING(255),
+      allowNull: false,
+      defaultValue: '',
+    },
+    status: {
+      type: DataTypes.ENUM(...DATASET_STATUS_VALUES),
+      allowNull: false,
+      defaultValue: DATASET_STATUS.PENDING,
+    },
+    rejectionReason: {
+      type: DataTypes.STRING(500),
+      allowNull: false,
+      defaultValue: '',
+    },
+    createdById: { type: DataTypes.INTEGER.UNSIGNED, allowNull: false },
+    updatedById: { type: DataTypes.INTEGER.UNSIGNED, allowNull: true },
+    reviewedById: { type: DataTypes.INTEGER.UNSIGNED, allowNull: true },
+    reviewedAt: { type: DataTypes.DATE, allowNull: true },
+    publishedAt: { type: DataTypes.DATE, allowNull: true },
+    /**
+     * Monotonically increasing publish counter, allocated on first approval.
+     * The public landing page orders by this column, so charts appear in the
+     * exact sequence they were approved.
+     */
+    publishSequence: {
+      type: DataTypes.INTEGER.UNSIGNED,
+      allowNull: true,
+      unique: true,
+    },
   },
   {
-    timestamps: true,
-    toJSON: {
-      virtuals: true,
-      transform: (_doc, ret) => {
-        delete ret.__v;
-        return ret;
-      },
-    },
+    sequelize,
+    modelName: 'Dataset',
+    tableName: 'datasets',
+    indexes: [
+      { fields: ['status', 'publish_sequence'] },
+      { fields: ['status', 'domain', 'publish_sequence'] },
+      { fields: ['created_by_id'] },
+    ],
   },
 );
-
-datasetSchema.index({ status: 1, publishSequence: 1 });
-datasetSchema.index({ status: 1, domain: 1, publishSequence: 1 });
-
-datasetSchema.virtual('isPublished').get(function isPublished() {
-  return this.status === DATASET_STATUS.APPROVED;
-});
-
-/** Effective visualisation key, e.g. `TIME_SERIES:LINE` or `STATE_HEATMAP`. */
-datasetSchema.virtual('visualisationKey').get(function visualisationKey() {
-  return this.chartType === CHART_TYPES.TIME_SERIES && this.chartVariant
-    ? `${this.chartType}:${this.chartVariant}`
-    : this.chartType;
-});
-
-datasetSchema.pre('save', function syncRowCount(next) {
-  if (this.isModified('rows')) {
-    this.rowCount = this.rows?.length ?? 0;
-  }
-  next();
-});
-
-const Dataset = mongoose.model('Dataset', datasetSchema);
 
 export default Dataset;

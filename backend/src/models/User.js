@@ -1,111 +1,119 @@
 import crypto from 'node:crypto';
 
 import bcrypt from 'bcryptjs';
-import mongoose from 'mongoose';
+import { DataTypes, Model } from 'sequelize';
 
+import sequelize from '../config/db.js';
 import { ROLES, ROLE_VALUES } from '../config/constants.js';
 
 const SALT_ROUNDS = 10;
 
-const userSchema = new mongoose.Schema(
+/** Columns that must never reach an API response. */
+export const USER_PRIVATE_FIELDS = [
+  'passwordHash',
+  'resetPasswordTokenHash',
+  'resetPasswordExpiresAt',
+];
+
+class User extends Model {
+  get isSuperAdmin() {
+    return this.role === ROLES.SUPER_ADMIN;
+  }
+
+  /** Hashes and assigns a plaintext password, clearing any pending reset. */
+  async setPassword(plainPassword) {
+    this.passwordHash = await bcrypt.hash(plainPassword, SALT_ROUNDS);
+    this.resetPasswordTokenHash = null;
+    this.resetPasswordExpiresAt = null;
+  }
+
+  verifyPassword(plainPassword) {
+    if (!this.passwordHash) return Promise.resolve(false);
+    return bcrypt.compare(plainPassword, this.passwordHash);
+  }
+
+  /**
+   * Issues a single-use reset token. The raw token is returned (and emailed);
+   * only its SHA-256 hash is persisted, so a database leak cannot be replayed.
+   */
+  createPasswordResetToken(ttlMinutes) {
+    const rawToken = crypto.randomBytes(32).toString('hex');
+    this.resetPasswordTokenHash = User.hashResetToken(rawToken);
+    this.resetPasswordExpiresAt = new Date(Date.now() + ttlMinutes * 60 * 1000);
+    return rawToken;
+  }
+
+  static hashResetToken(rawToken) {
+    return crypto.createHash('sha256').update(String(rawToken)).digest('hex');
+  }
+
+  /** Strips secrets and exposes the derived `isSuperAdmin` flag. */
+  toJSON() {
+    const values = { ...this.get() };
+    USER_PRIVATE_FIELDS.forEach((field) => delete values[field]);
+    values.isSuperAdmin = this.role === ROLES.SUPER_ADMIN;
+    return values;
+  }
+}
+
+User.init(
   {
+    id: {
+      type: DataTypes.INTEGER.UNSIGNED,
+      autoIncrement: true,
+      primaryKey: true,
+    },
     name: {
-      type: String,
-      required: [true, 'Name is required'],
-      trim: true,
-      maxlength: 120,
+      type: DataTypes.STRING(120),
+      allowNull: false,
+      validate: { notEmpty: { msg: 'Name is required' } },
     },
     email: {
-      type: String,
-      required: [true, 'Email is required'],
+      // 190 keeps the unique index within the utf8mb4 key-length limit on
+      // older MySQL/MariaDB versions.
+      type: DataTypes.STRING(190),
+      allowNull: false,
       unique: true,
-      lowercase: true,
-      trim: true,
-      index: true,
-    },
-    passwordHash: {
-      type: String,
-      required: true,
-      select: false,
-    },
-    role: {
-      type: String,
-      enum: ROLE_VALUES,
-      default: ROLES.ADMIN,
-      index: true,
-    },
-    isActive: {
-      type: Boolean,
-      default: true,
-      index: true,
-    },
-    /** Set when the Super Admin creates the account; cleared on first login. */
-    mustChangePassword: {
-      type: Boolean,
-      default: false,
-    },
-    lastLoginAt: { type: Date, default: null },
-
-    createdBy: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'User',
-      default: null,
-    },
-
-    /** Password reset – only the SHA-256 hash of the token is stored. */
-    resetPasswordTokenHash: { type: String, default: null, select: false },
-    resetPasswordExpiresAt: { type: Date, default: null, select: false },
-  },
-  {
-    timestamps: true,
-    toJSON: {
-      virtuals: true,
-      transform: (_doc, ret) => {
-        delete ret.passwordHash;
-        delete ret.resetPasswordTokenHash;
-        delete ret.resetPasswordExpiresAt;
-        delete ret.__v;
-        return ret;
+      validate: { isEmail: { msg: 'Enter a valid email address' } },
+      set(value) {
+        this.setDataValue('email', String(value ?? '').trim().toLowerCase());
       },
     },
+    passwordHash: {
+      type: DataTypes.STRING(255),
+      allowNull: false,
+    },
+    role: {
+      type: DataTypes.ENUM(...ROLE_VALUES),
+      allowNull: false,
+      defaultValue: ROLES.ADMIN,
+    },
+    isActive: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: true,
+    },
+    /** Set when the Super Admin issues a temporary password. */
+    mustChangePassword: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
+    },
+    lastLoginAt: { type: DataTypes.DATE, allowNull: true },
+    createdById: { type: DataTypes.INTEGER.UNSIGNED, allowNull: true },
+    resetPasswordTokenHash: { type: DataTypes.CHAR(64), allowNull: true },
+    resetPasswordExpiresAt: { type: DataTypes.DATE, allowNull: true },
+  },
+  {
+    sequelize,
+    modelName: 'User',
+    tableName: 'users',
+    indexes: [
+      { fields: ['role'] },
+      { fields: ['is_active'] },
+      { fields: ['reset_password_token_hash'] },
+    ],
   },
 );
-
-userSchema.virtual('isSuperAdmin').get(function isSuperAdmin() {
-  return this.role === ROLES.SUPER_ADMIN;
-});
-
-/** Hashes and assigns a plaintext password. */
-userSchema.methods.setPassword = async function setPassword(plainPassword) {
-  this.passwordHash = await bcrypt.hash(plainPassword, SALT_ROUNDS);
-  this.resetPasswordTokenHash = null;
-  this.resetPasswordExpiresAt = null;
-};
-
-userSchema.methods.verifyPassword = function verifyPassword(plainPassword) {
-  if (!this.passwordHash) return Promise.resolve(false);
-  return bcrypt.compare(plainPassword, this.passwordHash);
-};
-
-/**
- * Issues a single-use reset token. The raw token is returned (and emailed);
- * only its hash is persisted so a database leak cannot be replayed.
- */
-userSchema.methods.createPasswordResetToken = function createPasswordResetToken(
-  ttlMinutes,
-) {
-  const rawToken = crypto.randomBytes(32).toString('hex');
-  this.resetPasswordTokenHash = crypto
-    .createHash('sha256')
-    .update(rawToken)
-    .digest('hex');
-  this.resetPasswordExpiresAt = new Date(Date.now() + ttlMinutes * 60 * 1000);
-  return rawToken;
-};
-
-userSchema.statics.hashResetToken = (rawToken) =>
-  crypto.createHash('sha256').update(String(rawToken)).digest('hex');
-
-const User = mongoose.model('User', userSchema);
 
 export default User;

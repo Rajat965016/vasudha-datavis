@@ -1,26 +1,47 @@
-import mongoose from 'mongoose';
+import { DataTypes, Model } from 'sequelize';
+
+import sequelize from '../config/db.js';
 
 /**
- * Atomic named counters. Used to allocate the `publishSequence` that fixes the
- * order approved datasets appear in on the public landing page.
+ * Atomic named counters.
+ *
+ * Used to allocate `datasets.publish_sequence`. Taking a row lock inside a
+ * transaction is what makes two simultaneous approvals impossible to give the
+ * same position on the public landing page.
  */
-const counterSchema = new mongoose.Schema(
+class Counter extends Model {
+  static async next(name, transaction) {
+    const [counter] = await Counter.findOrCreate({
+      where: { name },
+      defaults: { value: 0 },
+      transaction,
+      lock: transaction ? transaction.LOCK.UPDATE : undefined,
+    });
+
+    counter.value += 1;
+    await counter.save({ transaction });
+    return counter.value;
+  }
+}
+
+Counter.init(
   {
-    _id: { type: String, required: true },
-    value: { type: Number, default: 0 },
+    name: {
+      type: DataTypes.STRING(64),
+      primaryKey: true,
+    },
+    value: {
+      type: DataTypes.INTEGER.UNSIGNED,
+      allowNull: false,
+      defaultValue: 0,
+    },
   },
-  { versionKey: false },
+  {
+    sequelize,
+    modelName: 'Counter',
+    tableName: 'counters',
+    timestamps: false,
+  },
 );
-
-counterSchema.statics.next = async function next(name) {
-  const doc = await this.findByIdAndUpdate(
-    name,
-    { $inc: { value: 1 } },
-    { new: true, upsert: true },
-  );
-  return doc.value;
-};
-
-const Counter = mongoose.model('Counter', counterSchema);
 
 export default Counter;
