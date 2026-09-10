@@ -1,6 +1,6 @@
 import env from '../config/env.js';
 import { ROLES } from '../config/constants.js';
-import User from '../models/User.js';
+import { User } from '../models/index.js';
 import logger from '../utils/logger.js';
 
 /**
@@ -13,13 +13,13 @@ import logger from '../utils/logger.js';
  * restarts and redeploys.
  */
 export const ensureSuperAdmin = async () => {
-  const existing = await User.findOne({ role: ROLES.SUPER_ADMIN });
+  const existing = await User.findOne({ where: { role: ROLES.SUPER_ADMIN } });
   if (existing) {
     logger.info(`Super Admin present → ${existing.email}`);
     return existing;
   }
 
-  const superAdmin = new User({
+  const superAdmin = User.build({
     name: env.superAdmin.name,
     email: env.superAdmin.email,
     role: ROLES.SUPER_ADMIN,

@@ -1,97 +1,179 @@
+import { Op } from 'sequelize';
+
 import { CHART_TYPES, DATASET_STATUS, ROLES } from '../config/constants.js';
-import Counter from '../models/Counter.js';
-import Dataset from '../models/Dataset.js';
+import sequelize from '../config/db.js';
+import { Counter, Dataset, DatasetRow, User } from '../models/index.js';
 import ApiError from '../utils/ApiError.js';
 
 const PUBLISH_COUNTER = 'dataset:publishSequence';
 
-/** Fields returned to the public site — never leaks reviewer/author internals. */
-const PUBLIC_FIELDS =
-  'title description domain chartType chartVariant valueUnit columns rows rowCount publishedAt publishSequence';
+/** Author/reviewer columns worth exposing on the dashboards. */
+const AUTHOR_ATTRIBUTES = ['id', 'name', 'email', 'role'];
 
-export const buildAdminListFilter = ({ user, query }) => {
-  const filter = {};
+/** Everything the public site is allowed to see about a dataset. */
+const PUBLIC_ATTRIBUTES = [
+  'id',
+  'title',
+  'description',
+  'domain',
+  'chartType',
+  'chartVariant',
+  'valueUnit',
+  'columns',
+  'rowCount',
+  'publishedAt',
+  'publishSequence',
+];
 
-  // Admins only ever see their own datasets; the Super Admin sees everything.
-  if (user.role !== ROLES.SUPER_ADMIN) {
-    filter.createdBy = user._id;
-  } else if (query.createdBy) {
-    filter.createdBy = query.createdBy;
-  }
+const escapeLike = (value) => String(value).replace(/[%_\\]/g, (match) => `\\${match}`);
 
-  if (query.status) filter.status = query.status;
-  if (query.domain) filter.domain = query.domain;
-  if (query.chartType) filter.chartType = query.chartType;
-  if (query.search) {
-    filter.title = { $regex: query.search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' };
-  }
+/* -------------------------------------------------------------------------- */
+/* Row storage                                                                */
+/* -------------------------------------------------------------------------- */
 
-  return filter;
+/** Loads a dataset's rows in upload order and unwraps the JSON payloads. */
+export const loadRows = async (datasetId, transaction) => {
+  const rows = await DatasetRow.findAll({
+    where: { datasetId },
+    order: [['rowIndex', 'ASC']],
+    transaction,
+  });
+  return rows.map((row) => row.payload);
+};
+
+/** Loads rows for several datasets at once, grouped by dataset id. */
+export const loadRowsForMany = async (datasetIds) => {
+  if (datasetIds.length === 0) return new Map();
+
+  const rows = await DatasetRow.findAll({
+    where: { datasetId: { [Op.in]: datasetIds } },
+    order: [
+      ['datasetId', 'ASC'],
+      ['rowIndex', 'ASC'],
+    ],
+  });
+
+  const grouped = new Map(datasetIds.map((id) => [id, []]));
+  rows.forEach((row) => {
+    grouped.get(row.datasetId)?.push(row.payload);
+  });
+  return grouped;
 };
 
 /**
- * Lists datasets for the dashboards. `rows` are excluded because a table only
- * needs metadata — this keeps dashboard responses small.
+ * Replaces a dataset's rows wholesale. Called inside the same transaction as
+ * the dataset write so a failed upload can never leave half the rows behind.
+ */
+export const replaceRows = async (datasetId, rows, transaction) => {
+  await DatasetRow.destroy({ where: { datasetId }, transaction });
+  if (rows.length === 0) return;
+
+  await DatasetRow.bulkCreate(
+    rows.map((payload, index) => ({ datasetId, rowIndex: index, payload })),
+    // Chunked so a large CSV does not build one enormous INSERT statement.
+    { transaction, validate: false },
+  );
+};
+
+/* -------------------------------------------------------------------------- */
+/* Queries                                                                    */
+/* -------------------------------------------------------------------------- */
+
+export const buildAdminListFilter = ({ user, query }) => {
+  const where = {};
+
+  // Admins only ever see their own datasets; the Super Admin sees everything.
+  if (user.role !== ROLES.SUPER_ADMIN) {
+    where.createdById = user.id;
+  } else if (query.createdBy) {
+    where.createdById = query.createdBy;
+  }
+
+  if (query.status) where.status = query.status;
+  if (query.domain) where.domain = query.domain;
+  if (query.chartType) where.chartType = query.chartType;
+  if (query.search) where.title = { [Op.like]: `%${escapeLike(query.search)}%` };
+
+  return where;
+};
+
+/**
+ * Lists datasets for the dashboards. Rows are deliberately not loaded — a
+ * table only needs metadata, which keeps dashboard responses small.
  */
 export const listDatasets = async ({ user, query }) => {
-  const filter = buildAdminListFilter({ user, query });
+  const where = buildAdminListFilter({ user, query });
   const { page, limit } = query;
 
-  const [items, total] = await Promise.all([
-    Dataset.find(filter)
-      .select('-rows')
-      .sort({ createdAt: -1 })
-      .skip((page - 1) * limit)
-      .limit(limit)
-      .populate('createdBy', 'name email role')
-      .populate('reviewedBy', 'name email')
-      .lean({ virtuals: true }),
-    Dataset.countDocuments(filter),
-  ]);
+  const { rows: items, count: total } = await Dataset.findAndCountAll({
+    where,
+    include: [
+      { model: User, as: 'createdBy', attributes: AUTHOR_ATTRIBUTES },
+      { model: User, as: 'reviewedBy', attributes: AUTHOR_ATTRIBUTES },
+    ],
+    order: [['createdAt', 'DESC']],
+    offset: (page - 1) * limit,
+    limit,
+  });
 
   return {
-    items,
+    items: items.map((dataset) => dataset.toJSON()),
     pagination: { page, limit, total, totalPages: Math.max(1, Math.ceil(total / limit)) },
   };
 };
 
-/** Loads one dataset and enforces ownership for non-super-admins. */
+/** Loads one dataset with its rows, enforcing ownership for non-super-admins. */
 export const getDatasetForUser = async (id, user) => {
-  const dataset = await Dataset.findById(id)
-    .populate('createdBy', 'name email role')
-    .populate('reviewedBy', 'name email');
+  const dataset = await Dataset.findByPk(id, {
+    include: [
+      { model: User, as: 'createdBy', attributes: AUTHOR_ATTRIBUTES },
+      { model: User, as: 'reviewedBy', attributes: AUTHOR_ATTRIBUTES },
+    ],
+  });
 
   if (!dataset) throw ApiError.notFound('Dataset not found.');
 
-  const isOwner = String(dataset.createdBy?._id ?? dataset.createdBy) === String(user._id);
-  if (user.role !== ROLES.SUPER_ADMIN && !isOwner) {
+  if (user.role !== ROLES.SUPER_ADMIN && dataset.createdById !== user.id) {
     throw ApiError.forbidden('You can only access datasets you created.');
   }
 
   return dataset;
 };
 
+/** Serialises a dataset together with its rows. */
+export const withRows = async (dataset) => ({
+  ...dataset.toJSON(),
+  rows: await loadRows(dataset.id),
+});
+
+/* -------------------------------------------------------------------------- */
+/* Review actions                                                             */
+/* -------------------------------------------------------------------------- */
+
 /**
- * Approving assigns the next publish sequence number, which is what fixes the
- * order of charts on the public landing page. Re-approving keeps the original
- * position so an edit does not reshuffle the page.
+ * Approving allocates the next publish sequence number, which fixes the order
+ * of charts on the public landing page. Re-approving keeps the original
+ * position, so an edit does not reshuffle the page.
  */
 export const approveDataset = async (dataset, reviewer) => {
   if (dataset.status === DATASET_STATUS.APPROVED) {
     throw ApiError.badRequest('This dataset is already approved.');
   }
 
-  if (dataset.publishSequence == null) {
-    dataset.publishSequence = await Counter.next(PUBLISH_COUNTER);
-  }
+  await sequelize.transaction(async (transaction) => {
+    if (dataset.publishSequence == null) {
+      dataset.publishSequence = await Counter.next(PUBLISH_COUNTER, transaction);
+    }
 
-  dataset.status = DATASET_STATUS.APPROVED;
-  dataset.rejectionReason = '';
-  dataset.reviewedBy = reviewer._id;
-  dataset.reviewedAt = new Date();
-  dataset.publishedAt = dataset.publishedAt ?? new Date();
+    dataset.status = DATASET_STATUS.APPROVED;
+    dataset.rejectionReason = '';
+    dataset.reviewedById = reviewer.id;
+    dataset.reviewedAt = new Date();
+    dataset.publishedAt = dataset.publishedAt ?? new Date();
 
-  await dataset.save();
+    await dataset.save({ transaction });
+  });
+
   return dataset;
 };
 
@@ -102,7 +184,7 @@ export const rejectDataset = async (dataset, reviewer, reason) => {
 
   dataset.status = DATASET_STATUS.REJECTED;
   dataset.rejectionReason = reason;
-  dataset.reviewedBy = reviewer._id;
+  dataset.reviewedById = reviewer.id;
   dataset.reviewedAt = new Date();
   dataset.publishedAt = null;
 
@@ -110,56 +192,88 @@ export const rejectDataset = async (dataset, reviewer, reason) => {
   return dataset;
 };
 
+/* -------------------------------------------------------------------------- */
+/* Public feed                                                                */
+/* -------------------------------------------------------------------------- */
+
 /**
- * Public feed. Only approved datasets, ordered by the sequence in which they
- * were approved, optionally narrowed to a single domain.
+ * Only approved datasets, ordered by the sequence in which they were approved,
+ * optionally narrowed to a single domain. Rows are attached in one extra query
+ * rather than one per dataset.
  */
 export const listPublishedDatasets = async ({ domain } = {}) => {
-  const filter = { status: DATASET_STATUS.APPROVED };
-  if (domain) filter.domain = domain;
+  const where = { status: DATASET_STATUS.APPROVED };
+  if (domain) where.domain = domain;
 
-  return Dataset.find(filter)
-    .select(PUBLIC_FIELDS)
-    .sort({ publishSequence: 1 })
-    .lean({ virtuals: true });
+  const datasets = await Dataset.findAll({
+    where,
+    attributes: PUBLIC_ATTRIBUTES,
+    order: [['publishSequence', 'ASC']],
+  });
+
+  const rowsByDataset = await loadRowsForMany(datasets.map((dataset) => dataset.id));
+
+  return datasets.map((dataset) => ({
+    ...dataset.toJSON(),
+    rows: rowsByDataset.get(dataset.id) ?? [],
+  }));
 };
 
 export const getPublishedDataset = async (id) => {
-  const dataset = await Dataset.findOne({ _id: id, status: DATASET_STATUS.APPROVED })
-    .select(PUBLIC_FIELDS)
-    .lean({ virtuals: true });
+  const dataset = await Dataset.findOne({
+    where: { id, status: DATASET_STATUS.APPROVED },
+    attributes: PUBLIC_ATTRIBUTES,
+  });
 
   if (!dataset) throw ApiError.notFound('This visualisation is not available.');
-  return dataset;
+
+  return { ...dataset.toJSON(), rows: await loadRows(dataset.id) };
 };
+
+/* -------------------------------------------------------------------------- */
+/* Statistics                                                                 */
+/* -------------------------------------------------------------------------- */
 
 /** Counts used by the dashboards and the public "at a glance" strip. */
 export const getDatasetStats = async ({ user } = {}) => {
-  const match = user && user.role !== ROLES.SUPER_ADMIN ? { createdBy: user._id } : {};
+  const scope = user && user.role !== ROLES.SUPER_ADMIN ? { createdById: user.id } : {};
 
   const [byStatus, byDomain] = await Promise.all([
-    Dataset.aggregate([{ $match: match }, { $group: { _id: '$status', count: { $sum: 1 } } }]),
-    Dataset.aggregate([
-      { $match: { ...match, status: DATASET_STATUS.APPROVED } },
-      { $group: { _id: '$domain', count: { $sum: 1 } } },
-    ]),
+    Dataset.findAll({
+      where: scope,
+      attributes: ['status', [sequelize.fn('COUNT', sequelize.col('id')), 'count']],
+      group: ['status'],
+      raw: true,
+    }),
+    Dataset.findAll({
+      where: { ...scope, status: DATASET_STATUS.APPROVED },
+      attributes: ['domain', [sequelize.fn('COUNT', sequelize.col('id')), 'count']],
+      group: ['domain'],
+      raw: true,
+    }),
   ]);
 
-  const toMap = (rows) => rows.reduce((acc, row) => ({ ...acc, [row._id]: row.count }), {});
-  const statusCounts = toMap(byStatus);
+  const toMap = (rows, key) =>
+    rows.reduce((acc, row) => ({ ...acc, [row[key]]: Number(row.count) }), {});
+
+  const statusCounts = toMap(byStatus, 'status');
 
   return {
     total: Object.values(statusCounts).reduce((sum, count) => sum + count, 0),
     pending: statusCounts[DATASET_STATUS.PENDING] ?? 0,
     approved: statusCounts[DATASET_STATUS.APPROVED] ?? 0,
     rejected: statusCounts[DATASET_STATUS.REJECTED] ?? 0,
-    byDomain: toMap(byDomain),
+    byDomain: toMap(byDomain, 'domain'),
   };
 };
 
+/* -------------------------------------------------------------------------- */
+/* Guards                                                                     */
+/* -------------------------------------------------------------------------- */
+
 /**
- * Guards a chart-type change on update: switching type is only allowed when a
- * new CSV is supplied, because the existing rows have the old shape.
+ * Switching chart type is only allowed alongside a new CSV, because the stored
+ * rows have the shape of the previous type.
  */
 export const assertChartTypeChangeAllowed = (dataset, nextChartType, hasNewFile) => {
   if (!nextChartType || nextChartType === dataset.chartType) return;
@@ -173,3 +287,5 @@ export const assertChartTypeChangeAllowed = (dataset, nextChartType, hasNewFile)
 /** Time-series datasets are the only ones where a variant is meaningful. */
 export const normaliseVariant = (chartType, chartVariant) =>
   chartType === CHART_TYPES.TIME_SERIES ? chartVariant ?? null : null;
+
+export { PUBLISH_COUNTER };

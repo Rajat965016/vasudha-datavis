@@ -1,6 +1,7 @@
 import env from '../config/env.js';
+import sequelize from '../config/db.js';
 import { DATASET_STATUS, ROLES } from '../config/constants.js';
-import Dataset from '../models/Dataset.js';
+import { Dataset, User } from '../models/index.js';
 import ApiError from '../utils/ApiError.js';
 import asyncHandler from '../utils/asyncHandler.js';
 import { sendDatasetReviewEmail } from '../utils/mailer.js';
@@ -14,7 +15,11 @@ import {
   listDatasets,
   normaliseVariant,
   rejectDataset,
+  replaceRows,
+  withRows,
 } from '../services/datasetService.js';
+
+const AUTHOR_ATTRIBUTES = ['id', 'name', 'email', 'role'];
 
 /** GET /api/datasets/schemas — drives the Add Dataset form. */
 export const getSchemas = asyncHandler(async (_req, res) => {
@@ -36,7 +41,7 @@ export const getStats = asyncHandler(async (req, res) => {
 /** GET /api/datasets/:id — includes rows so the form can preview the data. */
 export const getDataset = asyncHandler(async (req, res) => {
   const dataset = await getDatasetForUser(req.params.id, req.user);
-  res.json({ success: true, data: { dataset } });
+  res.json({ success: true, data: { dataset: await withRows(dataset) } });
 });
 
 /**
@@ -52,35 +57,46 @@ export const createDataset = asyncHandler(async (req, res) => {
   const { title, description, domain, chartType, chartVariant, valueUnit } = req.body;
   const parsed = parseDatasetCsv(req.file.buffer, chartType);
 
-  const dataset = await Dataset.create({
-    title,
-    description,
-    domain,
-    chartType,
-    chartVariant: normaliseVariant(chartType, chartVariant),
-    valueUnit,
-    columns: parsed.columns,
-    rows: parsed.rows,
-    rowCount: parsed.rowCount,
-    sourceFileName: req.file.originalname,
-    status: DATASET_STATUS.PENDING,
-    createdBy: req.user._id,
+  // The dataset and its rows are written together, so a failure part-way
+  // through cannot leave a dataset with no data.
+  const dataset = await sequelize.transaction(async (transaction) => {
+    const created = await Dataset.create(
+      {
+        title,
+        description,
+        domain,
+        chartType,
+        chartVariant: normaliseVariant(chartType, chartVariant),
+        valueUnit,
+        columns: parsed.columns,
+        rowCount: parsed.rowCount,
+        sourceFileName: req.file.originalname,
+        status: DATASET_STATUS.PENDING,
+        createdById: req.user.id,
+      },
+      { transaction },
+    );
+
+    await replaceRows(created.id, parsed.rows, transaction);
+    return created;
   });
 
-  await dataset.populate('createdBy', 'name email role');
+  await dataset.reload({
+    include: [{ model: User, as: 'createdBy', attributes: AUTHOR_ATTRIBUTES }],
+  });
 
   res.status(201).json({
     success: true,
     message: `"${dataset.title}" was uploaded with ${parsed.rowCount} rows and is awaiting Super Admin approval.`,
-    data: { dataset, meta: parsed.meta },
+    data: { dataset: dataset.toJSON(), meta: parsed.meta },
   });
 });
 
 /**
  * PUT /api/datasets/:id
  * An Admin may edit their own dataset; the Super Admin may edit any dataset.
- * Editing an approved dataset sends it back to PENDING for re-approval, but
- * keeps its original publish position.
+ * An Admin editing an approved dataset sends it back to PENDING for
+ * re-approval, but it keeps its original publish position.
  */
 export const updateDataset = asyncHandler(async (req, res) => {
   const dataset = await getDatasetForUser(req.params.id, req.user);
@@ -89,36 +105,42 @@ export const updateDataset = asyncHandler(async (req, res) => {
   assertChartTypeChangeAllowed(dataset, chartType, Boolean(req.file));
 
   const nextChartType = chartType ?? dataset.chartType;
+  const parsed = req.file ? parseDatasetCsv(req.file.buffer, nextChartType) : null;
 
-  if (req.file) {
-    const parsed = parseDatasetCsv(req.file.buffer, nextChartType);
-    dataset.columns = parsed.columns;
-    dataset.rows = parsed.rows;
-    dataset.rowCount = parsed.rowCount;
-    dataset.sourceFileName = req.file.originalname;
-  }
+  await sequelize.transaction(async (transaction) => {
+    if (parsed) {
+      dataset.columns = parsed.columns;
+      dataset.rowCount = parsed.rowCount;
+      dataset.sourceFileName = req.file.originalname;
+      await replaceRows(dataset.id, parsed.rows, transaction);
+    }
 
-  if (title !== undefined) dataset.title = title;
-  if (description !== undefined) dataset.description = description;
-  if (domain !== undefined) dataset.domain = domain;
-  if (valueUnit !== undefined) dataset.valueUnit = valueUnit;
-  dataset.chartType = nextChartType;
-  dataset.chartVariant = normaliseVariant(
-    nextChartType,
-    chartVariant !== undefined ? chartVariant : dataset.chartVariant,
-  );
-  dataset.updatedBy = req.user._id;
+    if (title !== undefined) dataset.title = title;
+    if (description !== undefined) dataset.description = description;
+    if (domain !== undefined) dataset.domain = domain;
+    if (valueUnit !== undefined) dataset.valueUnit = valueUnit;
 
-  // An Admin editing published content must go through review again.
-  if (req.user.role !== ROLES.SUPER_ADMIN && dataset.status !== DATASET_STATUS.PENDING) {
-    dataset.status = DATASET_STATUS.PENDING;
-    dataset.rejectionReason = '';
-    dataset.reviewedBy = null;
-    dataset.reviewedAt = null;
-  }
+    dataset.chartType = nextChartType;
+    dataset.chartVariant = normaliseVariant(
+      nextChartType,
+      chartVariant !== undefined ? chartVariant : dataset.chartVariant,
+    );
+    dataset.updatedById = req.user.id;
 
-  await dataset.save();
-  await dataset.populate('createdBy', 'name email role');
+    // An Admin editing published content must go through review again.
+    if (req.user.role !== ROLES.SUPER_ADMIN && dataset.status !== DATASET_STATUS.PENDING) {
+      dataset.status = DATASET_STATUS.PENDING;
+      dataset.rejectionReason = '';
+      dataset.reviewedById = null;
+      dataset.reviewedAt = null;
+    }
+
+    await dataset.save({ transaction });
+  });
+
+  await dataset.reload({
+    include: [{ model: User, as: 'createdBy', attributes: AUTHOR_ATTRIBUTES }],
+  });
 
   res.json({
     success: true,
@@ -126,21 +148,23 @@ export const updateDataset = asyncHandler(async (req, res) => {
       dataset.status === DATASET_STATUS.PENDING
         ? 'Dataset updated and sent for Super Admin approval.'
         : 'Dataset updated.',
-    data: { dataset },
+    data: { dataset: dataset.toJSON() },
   });
 });
 
-/** DELETE /api/datasets/:id */
+/** DELETE /api/datasets/:id — rows are removed by the ON DELETE CASCADE. */
 export const deleteDataset = asyncHandler(async (req, res) => {
   const dataset = await getDatasetForUser(req.params.id, req.user);
-  await dataset.deleteOne();
-  res.json({ success: true, message: `"${dataset.title}" was deleted.` });
+  const { title } = dataset;
+
+  await dataset.destroy();
+
+  res.json({ success: true, message: `"${title}" was deleted.` });
 });
 
 /** Notifies the author of a review decision; failures never block the review. */
 const notifyAuthor = async (dataset, status, reason) => {
-  await dataset.populate('createdBy', 'name email');
-  const author = dataset.createdBy;
+  const author = await User.findByPk(dataset.createdById, { attributes: AUTHOR_ATTRIBUTES });
   if (!author?.email) return;
 
   await sendDatasetReviewEmail({
@@ -155,7 +179,7 @@ const notifyAuthor = async (dataset, status, reason) => {
 
 /** PATCH /api/datasets/:id/approve — Super Admin only. */
 export const approve = asyncHandler(async (req, res) => {
-  const dataset = await Dataset.findById(req.params.id);
+  const dataset = await Dataset.findByPk(req.params.id);
   if (!dataset) throw ApiError.notFound('Dataset not found.');
 
   await approveDataset(dataset, req.user);
@@ -164,13 +188,13 @@ export const approve = asyncHandler(async (req, res) => {
   res.json({
     success: true,
     message: `"${dataset.title}" is now published on the public site.`,
-    data: { dataset },
+    data: { dataset: dataset.toJSON() },
   });
 });
 
 /** PATCH /api/datasets/:id/reject — Super Admin only. */
 export const reject = asyncHandler(async (req, res) => {
-  const dataset = await Dataset.findById(req.params.id);
+  const dataset = await Dataset.findByPk(req.params.id);
   if (!dataset) throw ApiError.notFound('Dataset not found.');
 
   await rejectDataset(dataset, req.user, req.body.reason);
@@ -179,6 +203,6 @@ export const reject = asyncHandler(async (req, res) => {
   res.json({
     success: true,
     message: `"${dataset.title}" was rejected and remains hidden from the public site.`,
-    data: { dataset },
+    data: { dataset: dataset.toJSON() },
   });
 });

@@ -1,5 +1,7 @@
+import { Op } from 'sequelize';
+
 import env from '../config/env.js';
-import User from '../models/User.js';
+import { User } from '../models/index.js';
 import ApiError from '../utils/ApiError.js';
 import asyncHandler from '../utils/asyncHandler.js';
 import { signAccessToken } from '../utils/jwt.js';
@@ -9,8 +11,9 @@ import { isMailEnabled, sendPasswordResetEmail } from '../utils/mailer.js';
 export const login = asyncHandler(async (req, res) => {
   const { email, password } = req.body;
 
-  const user = await User.findOne({ email }).select('+passwordHash');
-  // Same message for "no such user" and "wrong password" – avoids account enumeration.
+  const user = await User.findOne({ where: { email } });
+  // The same message for "no such user" and "wrong password" avoids
+  // letting an attacker discover which addresses have accounts.
   const invalid = ApiError.unauthorized('Incorrect email or password.');
   if (!user) throw invalid;
 
@@ -24,7 +27,7 @@ export const login = asyncHandler(async (req, res) => {
   }
 
   user.lastLoginAt = new Date();
-  await user.save({ validateBeforeSave: false });
+  await user.save({ silent: true });
 
   res.json({
     success: true,
@@ -44,7 +47,7 @@ export const getProfile = asyncHandler(async (req, res) => {
 export const changePassword = asyncHandler(async (req, res) => {
   const { currentPassword, newPassword } = req.body;
 
-  const user = await User.findById(req.user._id).select('+passwordHash');
+  const user = await User.findByPk(req.user.id);
   const matches = await user.verifyPassword(currentPassword);
   if (!matches) throw ApiError.badRequest('Your current password is incorrect.');
 
@@ -72,9 +75,7 @@ export const forgotPassword = asyncHandler(async (req, res) => {
       'If an account exists for that email address, a password reset link has been sent.',
   };
 
-  const user = await User.findOne({ email }).select(
-    '+resetPasswordTokenHash +resetPasswordExpiresAt',
-  );
+  const user = await User.findOne({ where: { email } });
 
   if (!user || !user.isActive) {
     res.json(genericResponse);
@@ -82,7 +83,7 @@ export const forgotPassword = asyncHandler(async (req, res) => {
   }
 
   const rawToken = user.createPasswordResetToken(env.passwordResetTtlMinutes);
-  await user.save({ validateBeforeSave: false });
+  await user.save();
 
   const resetUrl = `${env.frontendUrl}/reset-password?token=${rawToken}`;
   await sendPasswordResetEmail({
@@ -105,9 +106,11 @@ export const resetPassword = asyncHandler(async (req, res) => {
   const { token, password } = req.body;
 
   const user = await User.findOne({
-    resetPasswordTokenHash: User.hashResetToken(token),
-    resetPasswordExpiresAt: { $gt: new Date() },
-  }).select('+passwordHash +resetPasswordTokenHash +resetPasswordExpiresAt');
+    where: {
+      resetPasswordTokenHash: User.hashResetToken(token),
+      resetPasswordExpiresAt: { [Op.gt]: new Date() },
+    },
+  });
 
   if (!user) {
     throw ApiError.badRequest('This password reset link is invalid or has expired.');
@@ -116,6 +119,7 @@ export const resetPassword = asyncHandler(async (req, res) => {
     throw ApiError.forbidden('This account has been disabled.');
   }
 
+  // setPassword clears the token, so a reset link works exactly once.
   await user.setPassword(password);
   user.mustChangePassword = false;
   await user.save();

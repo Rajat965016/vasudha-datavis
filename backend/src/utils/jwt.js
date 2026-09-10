@@ -5,7 +5,7 @@ import ApiError from './ApiError.js';
 
 export const signAccessToken = (user) =>
   jwt.sign(
-    { sub: String(user._id), role: user.role, email: user.email },
+    { sub: String(user.id), role: user.role, email: user.email },
     env.jwtSecret,
     { expiresIn: env.jwtExpiresIn },
   );

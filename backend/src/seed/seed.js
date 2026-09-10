@@ -2,12 +2,17 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { CHART_TYPES, CHART_VARIANTS, DOMAINS, ROLES } from '../config/constants.js';
-import { connectDatabase, disconnectDatabase } from '../config/db.js';
-import Counter from '../models/Counter.js';
-import Dataset from '../models/Dataset.js';
-import User from '../models/User.js';
+import {
+  CHART_TYPES,
+  CHART_VARIANTS,
+  DATASET_STATUS,
+  DOMAINS,
+  ROLES,
+} from '../config/constants.js';
+import sequelize, { connectDatabase, disconnectDatabase } from '../config/db.js';
+import { Counter, Dataset, User, syncDatabase } from '../models/index.js';
 import parseDatasetCsv from '../services/csvParser.js';
+import { PUBLISH_COUNTER, replaceRows } from '../services/datasetService.js';
 import logger from '../utils/logger.js';
 import { ensureSuperAdmin } from './ensureSuperAdmin.js';
 
@@ -58,19 +63,19 @@ const DEMO_ADMIN = {
 const withDemoData = process.argv.includes('--demo');
 
 const seedDemoAdmin = async (superAdmin) => {
-  let admin = await User.findOne({ email: DEMO_ADMIN.email });
-  if (admin) {
-    logger.info(`Demo Admin already present → ${admin.email}`);
-    return admin;
+  const existing = await User.findOne({ where: { email: DEMO_ADMIN.email } });
+  if (existing) {
+    logger.info(`Demo Admin already present → ${existing.email}`);
+    return existing;
   }
 
-  admin = new User({
+  const admin = User.build({
     name: DEMO_ADMIN.name,
     email: DEMO_ADMIN.email,
     role: ROLES.ADMIN,
     isActive: true,
     mustChangePassword: false,
-    createdBy: superAdmin._id,
+    createdById: superAdmin.id,
   });
   await admin.setPassword(DEMO_ADMIN.password);
   await admin.save();
@@ -81,7 +86,7 @@ const seedDemoAdmin = async (superAdmin) => {
 
 const seedSampleDatasets = async (admin, superAdmin) => {
   for (const sample of SAMPLE_DATASETS) {
-    const existing = await Dataset.findOne({ title: sample.title });
+    const existing = await Dataset.findOne({ where: { title: sample.title } });
     if (existing) {
       logger.info(`Sample dataset already present → ${sample.title}`);
       continue;
@@ -90,22 +95,31 @@ const seedSampleDatasets = async (admin, superAdmin) => {
     const csv = await fs.readFile(path.join(samplesDir, sample.file), 'utf8');
     const parsed = parseDatasetCsv(csv, sample.chartType);
 
-    const dataset = await Dataset.create({
-      ...sample,
-      columns: parsed.columns,
-      rows: parsed.rows,
-      rowCount: parsed.rowCount,
-      sourceFileName: sample.file,
-      createdBy: admin._id,
-    });
+    // Seeded datasets are published so a fresh deployment has something to show.
+    await sequelize.transaction(async (transaction) => {
+      const dataset = await Dataset.create(
+        {
+          title: sample.title,
+          description: sample.description,
+          domain: sample.domain,
+          chartType: sample.chartType,
+          chartVariant: sample.chartVariant,
+          valueUnit: sample.valueUnit,
+          columns: parsed.columns,
+          rowCount: parsed.rowCount,
+          sourceFileName: sample.file,
+          createdById: admin.id,
+          status: DATASET_STATUS.APPROVED,
+          reviewedById: superAdmin.id,
+          reviewedAt: new Date(),
+          publishedAt: new Date(),
+          publishSequence: await Counter.next(PUBLISH_COUNTER, transaction),
+        },
+        { transaction },
+      );
 
-    // Publish them so a fresh deployment has something on the landing page.
-    dataset.status = 'APPROVED';
-    dataset.reviewedBy = superAdmin._id;
-    dataset.reviewedAt = new Date();
-    dataset.publishedAt = new Date();
-    dataset.publishSequence = await Counter.next('dataset:publishSequence');
-    await dataset.save();
+      await replaceRows(dataset.id, parsed.rows, transaction);
+    });
 
     logger.info(`Sample dataset seeded → ${sample.title} (${parsed.rowCount} rows)`);
   }
@@ -113,6 +127,8 @@ const seedSampleDatasets = async (admin, superAdmin) => {
 
 const run = async () => {
   await connectDatabase();
+  // Makes the seed usable on a completely empty database.
+  await syncDatabase();
 
   const superAdmin = await ensureSuperAdmin();
 

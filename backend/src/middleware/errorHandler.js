@@ -1,4 +1,9 @@
-import mongoose from 'mongoose';
+import {
+  DatabaseError,
+  ForeignKeyConstraintError,
+  UniqueConstraintError,
+  ValidationError,
+} from 'sequelize';
 
 import env from '../config/env.js';
 import ApiError from '../utils/ApiError.js';
@@ -13,18 +18,26 @@ export const notFoundHandler = (req, _res, next) => {
 export const errorHandler = (error, req, res, _next) => {
   let normalised = error;
 
-  if (error instanceof mongoose.Error.ValidationError) {
+  if (error instanceof UniqueConstraintError) {
+    const field = error.errors?.[0]?.path ?? 'value';
+    normalised = ApiError.conflict(`A record with this ${field} already exists.`);
+  } else if (error instanceof ValidationError) {
     normalised = ApiError.unprocessable('Please correct the highlighted fields.', {
-      errors: Object.values(error.errors).map((issue) => ({
+      errors: error.errors.map((issue) => ({
         field: issue.path,
         message: issue.message,
       })),
     });
-  } else if (error instanceof mongoose.Error.CastError) {
-    normalised = ApiError.badRequest(`Invalid identifier: ${error.value}`);
-  } else if (error?.code === 11000) {
-    const field = Object.keys(error.keyValue ?? {})[0] ?? 'field';
-    normalised = ApiError.conflict(`A record with this ${field} already exists.`);
+  } else if (error instanceof ForeignKeyConstraintError) {
+    normalised = ApiError.conflict(
+      'This record is still referenced by other data and cannot be changed.',
+    );
+  } else if (error instanceof DatabaseError) {
+    // Never leak SQL, table names or the query itself to a client.
+    logger.error('Database error:', error.message);
+    normalised = ApiError.internal(
+      env.isProduction ? 'A database error occurred. Please try again.' : error.message,
+    );
   } else if (!(error instanceof ApiError)) {
     normalised = ApiError.internal(
       env.isProduction ? 'Something went wrong. Please try again.' : error.message,

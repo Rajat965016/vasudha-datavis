@@ -1,9 +1,11 @@
 import crypto from 'node:crypto';
 
+import { Op } from 'sequelize';
+
 import env from '../config/env.js';
-import { ROLES } from '../config/constants.js';
-import Dataset from '../models/Dataset.js';
-import User from '../models/User.js';
+import sequelize from '../config/db.js';
+import { DATASET_STATUS, ROLES } from '../config/constants.js';
+import { Dataset, User } from '../models/index.js';
 import ApiError from '../utils/ApiError.js';
 import asyncHandler from '../utils/asyncHandler.js';
 import { isMailEnabled, sendAdminWelcomeEmail } from '../utils/mailer.js';
@@ -30,29 +32,41 @@ const generatePassword = () => {
 
 const loginUrl = `${env.frontendUrl}/login`;
 
+const EMPTY_COUNTS = {
+  [DATASET_STATUS.PENDING]: 0,
+  [DATASET_STATUS.APPROVED]: 0,
+  [DATASET_STATUS.REJECTED]: 0,
+};
+
 /** GET /api/admins — Super Admin only. */
 export const listAdmins = asyncHandler(async (req, res) => {
   const { search, status } = req.query;
 
-  const filter = { role: ROLES.ADMIN };
+  const where = { role: ROLES.ADMIN };
   if (search) {
-    const safe = String(search).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    filter.$or = [{ name: { $regex: safe, $options: 'i' } }, { email: { $regex: safe, $options: 'i' } }];
+    const safe = `%${String(search).replace(/[%_\\]/g, (m) => `\\${m}`)}%`;
+    where[Op.or] = [{ name: { [Op.like]: safe } }, { email: { [Op.like]: safe } }];
   }
-  if (status === 'active') filter.isActive = true;
-  if (status === 'disabled') filter.isActive = false;
+  if (status === 'active') where.isActive = true;
+  if (status === 'disabled') where.isActive = false;
 
-  const admins = await User.find(filter).sort({ createdAt: -1 }).lean({ virtuals: true });
+  const admins = await User.findAll({ where, order: [['createdAt', 'DESC']] });
 
-  // Attach a dataset count so the Super Admin can see each Admin's contribution.
-  const counts = await Dataset.aggregate([
-    { $match: { createdBy: { $in: admins.map((admin) => admin._id) } } },
-    { $group: { _id: { createdBy: '$createdBy', status: '$status' }, count: { $sum: 1 } } },
-  ]);
+  // One grouped query gives every Admin's contribution, rather than N queries.
+  const counts = await Dataset.findAll({
+    where: { createdById: { [Op.in]: admins.map((admin) => admin.id) } },
+    attributes: [
+      'createdById',
+      'status',
+      [sequelize.fn('COUNT', sequelize.col('id')), 'count'],
+    ],
+    group: ['createdById', 'status'],
+    raw: true,
+  });
 
   const countsByAdmin = counts.reduce((acc, row) => {
-    const key = String(row._id.createdBy);
-    acc[key] = { ...(acc[key] ?? {}), [row._id.status]: row.count };
+    const key = String(row.createdById);
+    acc[key] = { ...(acc[key] ?? {}), [row.status]: Number(row.count) };
     return acc;
   }, {});
 
@@ -60,13 +74,8 @@ export const listAdmins = asyncHandler(async (req, res) => {
     success: true,
     data: {
       items: admins.map((admin) => ({
-        ...admin,
-        datasetCounts: {
-          PENDING: 0,
-          APPROVED: 0,
-          REJECTED: 0,
-          ...(countsByAdmin[String(admin._id)] ?? {}),
-        },
+        ...admin.toJSON(),
+        datasetCounts: { ...EMPTY_COUNTS, ...(countsByAdmin[String(admin.id)] ?? {}) },
       })),
       total: admins.length,
     },
@@ -77,17 +86,17 @@ export const listAdmins = asyncHandler(async (req, res) => {
 export const createAdmin = asyncHandler(async (req, res) => {
   const { name, email, password, sendCredentialsEmail } = req.body;
 
-  const existing = await User.findOne({ email });
+  const existing = await User.findOne({ where: { email } });
   if (existing) throw ApiError.conflict('An account with this email already exists.');
 
   const plainPassword = password ?? generatePassword();
-  const admin = new User({
+  const admin = User.build({
     name,
     email,
     role: ROLES.ADMIN,
     isActive: true,
     mustChangePassword: true,
-    createdBy: req.user._id,
+    createdById: req.user.id,
   });
   await admin.setPassword(plainPassword);
   await admin.save();
@@ -117,7 +126,7 @@ export const createAdmin = asyncHandler(async (req, res) => {
 });
 
 const loadAdmin = async (id) => {
-  const admin = await User.findById(id);
+  const admin = await User.findByPk(id);
   if (!admin) throw ApiError.notFound('Admin account not found.');
   if (admin.role === ROLES.SUPER_ADMIN) {
     throw ApiError.forbidden('The Super Admin account cannot be managed from here.');
@@ -178,19 +187,20 @@ export const resetAdminPassword = asyncHandler(async (req, res) => {
 
 /**
  * DELETE /api/admins/:id
- * Refuses while the Admin still owns datasets — disabling is the safe
- * alternative and keeps the audit trail of who published what.
+ * Refused while the Admin still owns datasets — the foreign key is ON DELETE
+ * RESTRICT for the same reason. Disabling is the safe alternative and keeps
+ * the audit trail of who published what.
  */
 export const deleteAdmin = asyncHandler(async (req, res) => {
   const admin = await loadAdmin(req.params.id);
 
-  const datasetCount = await Dataset.countDocuments({ createdBy: admin._id });
+  const datasetCount = await Dataset.count({ where: { createdById: admin.id } });
   if (datasetCount > 0) {
     throw ApiError.conflict(
       `This Admin has ${datasetCount} dataset(s). Reassign or delete them first, or disable the account instead.`,
     );
   }
 
-  await admin.deleteOne();
+  await admin.destroy();
   res.json({ success: true, message: 'Admin account deleted.' });
 });
