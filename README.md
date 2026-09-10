@@ -85,15 +85,28 @@ edited dataset keeps its original position rather than reshuffling the page.
 **Backend**
 
 - Node.js 18+ / Express 4 (ES modules)
-- MongoDB + Mongoose 8
+- **MySQL 8** + Sequelize 6 (`mysql2` driver)
 - JWT authentication (`jsonwebtoken`) with bcrypt password hashing
 - Zod request validation
 - PapaParse CSV parsing, Multer in-memory uploads
 - Helmet, CORS, compression, express-rate-limit
 - Nodemailer (optional — bonus email features)
 
-**Database:** MongoDB (NoSQL). Chosen because uploaded CSVs have varying shapes; storing normalised
-rows as documents avoids a schema migration each time a new dataset structure is supported.
+**Database:** MySQL 8 (relational), accessed through Sequelize.
+
+Four tables — `users`, `datasets`, `dataset_rows`, `counters` — with real foreign keys:
+
+- `datasets.created_by_id` → `users.id` is `ON DELETE RESTRICT`, so an Admin who still owns
+  datasets cannot be deleted and the record of who published what survives.
+- `dataset_rows.dataset_id` → `datasets.id` is `ON DELETE CASCADE`, so deleting a dataset removes
+  its rows in one statement.
+- `datasets.publish_sequence` is `UNIQUE`; it is allocated inside a transaction that locks a row in
+  `counters`, so two simultaneous approvals can never claim the same position on the landing page.
+
+Each CSV row lives in its own `dataset_rows` record, with the row's values in a `JSON` column. That
+keeps dashboard queries off the data entirely, lets deletes cascade, and still supports a different
+set of columns per chart type without a migration every time a new dataset shape is added —
+`datasets.columns` describes what each row contains. The full DDL is in `backend/database/schema.sql`.
 
 ---
 
@@ -102,11 +115,13 @@ rows as documents avoids a schema migration each time a new dataset structure is
 ```
 vasudha-datavis/
 ├── backend/
+│   ├── database/
+│   │   └── schema.sql               # reviewable MySQL DDL (optional to run)
 │   ├── samples/                     # the three sample CSVs from the Resources folder
 │   └── src/
 │       ├── config/
 │       │   ├── constants.js         # roles, domains, chart types, statuses
-│       │   ├── db.js                # MongoDB connection
+│       │   ├── db.js                # Sequelize / MySQL connection
 │       │   ├── env.js               # typed, validated environment config
 │       │   └── indiaStates.js       # canonical state names + alias resolution
 │       ├── controllers/             # HTTP layer only
@@ -119,7 +134,9 @@ vasudha-datavis/
 │       │   ├── errorHandler.js      # single JSON error envelope
 │       │   ├── upload.js            # multer CSV upload guard
 │       │   └── validate.js          # Zod → 422 with field errors
-│       ├── models/                  # User, Dataset, Counter
+│       ├── database/sync.js         # `npm run db:sync` — create tables
+│       ├── models/                  # User, Dataset, DatasetRow, Counter
+│       │                            # + index.js: associations & foreign keys
 │       ├── routes/                  # auth, admins, datasets, public
 │       ├── seed/
 │       │   ├── ensureSuperAdmin.js  # runs on every boot
@@ -164,15 +181,15 @@ vasudha-datavis/
 ## 4. Dependencies
 
 Everything installs from npm; there is nothing to install globally except Node.js and (for local
-development) MongoDB.
+development) MySQL.
 
 | Requirement | Version |
 | --- | --- |
 | Node.js | 18 or newer |
 | npm | 9 or newer |
-| MongoDB | 6 or newer, local or MongoDB Atlas |
+| MySQL | 8.0 or newer (MariaDB 10.5+ also works) |
 
-Backend runtime dependencies: `express`, `mongoose`, `bcryptjs`, `jsonwebtoken`, `zod`,
+Backend runtime dependencies: `express`, `sequelize`, `mysql2`, `bcryptjs`, `jsonwebtoken`, `zod`,
 `papaparse`, `multer`, `nodemailer`, `helmet`, `cors`, `compression`, `morgan`,
 `express-rate-limit`, `dotenv`.
 
@@ -204,20 +221,57 @@ cp .env.example .env
 
 ### `backend/.env`
 
+**Server**
+
 | Variable | Required | Default | Purpose |
 | --- | --- | --- | --- |
 | `NODE_ENV` | no | `development` | `production` enables stricter checks and hides stack traces |
 | `PORT` | no | `5000` | HTTP port |
-| `MONGODB_URI` | **yes** | local URI | MongoDB connection string |
+| `CORS_ORIGINS` | no | `http://localhost:5173` | Comma-separated allowed origins |
+| `FRONTEND_URL` | no | `http://localhost:5173` | Used to build links inside emails |
+
+**MySQL**
+
+| Variable | Required | Default | Purpose |
+| --- | --- | --- | --- |
+| `DATABASE_URL` | no | — | Full connection string, e.g. `mysql://user:pass@host:3306/vasudha_datavis`. **Takes priority over the individual settings below.** |
+| `DB_HOST` | yes* | `127.0.0.1` | Database host |
+| `DB_PORT` | no | `3306` | Database port |
+| `DB_NAME` | yes* | `vasudha_datavis` | Database name |
+| `DB_USER` | yes* | `root` | Database user |
+| `DB_PASSWORD` | yes* | empty | Database password |
+| `DB_SSL` | no | `false` | Set `true` for a cloud MySQL host — nearly all require TLS |
+| `DB_SSL_CA` | no | empty | PEM contents of the provider's CA certificate (Aiven and similar) |
+| `DB_SSL_REJECT_UNAUTHORIZED` | no | `true` | Last resort for a certificate that cannot be verified |
+| `DB_POOL_MAX` / `DB_POOL_MIN` | no | `10` / `0` | Connection pool size |
+| `DB_LOGGING` | no | `false` | Log every SQL statement (development only) |
+| `DB_SYNC` | no | `true` | Create missing tables on boot |
+
+\* Not needed when `DATABASE_URL` is set.
+
+**Authentication**
+
+| Variable | Required | Default | Purpose |
+| --- | --- | --- | --- |
 | `JWT_SECRET` | **yes** | dev value | Signing key — use `openssl rand -hex 48` in production |
 | `JWT_EXPIRES_IN` | no | `7d` | Access token lifetime |
 | `PASSWORD_RESET_TTL_MINUTES` | no | `30` | Password-reset link expiry |
-| `CORS_ORIGINS` | no | `http://localhost:5173` | Comma-separated allowed origins |
-| `FRONTEND_URL` | no | `http://localhost:5173` | Used to build links inside emails |
-| `SUPER_ADMIN_NAME` / `_EMAIL` / `_PASSWORD` | no | see below | Default Super Admin created on first boot |
+| `AUTH_RATE_LIMIT_WINDOW_MINUTES` | no | `15` | Throttle window for credential endpoints |
+| `AUTH_RATE_LIMIT_MAX` | no | `20` | Attempts allowed per window per IP |
+
+**Seeding and uploads**
+
+| Variable | Required | Default | Purpose |
+| --- | --- | --- | --- |
+| `SUPER_ADMIN_NAME` / `_EMAIL` / `_PASSWORD` | no | see §9 | Default Super Admin created on first boot |
 | `MAX_UPLOAD_BYTES` | no | `5242880` | Upload size limit (5 MB) |
 | `MAX_DATASET_ROWS` | no | `20000` | Row limit per dataset |
-| `SMTP_HOST` / `SMTP_PORT` / `SMTP_SECURE` / `SMTP_USER` / `SMTP_PASSWORD` / `MAIL_FROM` | no | empty | Optional outbound email |
+
+**Email (optional bonus feature)**
+
+| Variable | Required | Default |
+| --- | --- | --- |
+| `SMTP_HOST` / `SMTP_PORT` / `SMTP_SECURE` / `SMTP_USER` / `SMTP_PASSWORD` / `MAIL_FROM` | no | empty |
 
 > Leaving `SMTP_HOST` empty disables email. Nothing breaks: account creation still works and the
 > generated password is shown to the Super Admin once in the UI, and the password-reset link is
@@ -234,24 +288,93 @@ cp .env.example .env
 
 ## 7. Database setup
 
-No migrations are needed — Mongoose creates collections and indexes on first use.
+### Schema
 
-**Local MongoDB**
+Four tables, created for you on first boot (`DB_SYNC=true`):
 
-```bash
-# Ubuntu/Debian example
-sudo systemctl start mongod
-# .env
-MONGODB_URI=mongodb://127.0.0.1:27017/vasudha_datavis
+| Table | Contents |
+| --- | --- |
+| `users` | Super Admin and Admin accounts, bcrypt password hashes, active flag, hashed reset tokens |
+| `datasets` | One uploaded CSV plus its visualisation configuration, status and review trail |
+| `dataset_rows` | The validated rows of each CSV — one record per row, values in a `JSON` column |
+| `counters` | Atomic named sequences; allocates `datasets.publish_sequence` |
+
+```
+users ──< datasets ──< dataset_rows
+  │          │
+  │          ├── created_by_id   → users.id   ON DELETE RESTRICT
+  │          ├── updated_by_id   → users.id   ON DELETE SET NULL
+  │          └── reviewed_by_id  → users.id   ON DELETE SET NULL
+  └── created_by_id → users.id               ON DELETE SET NULL
+
+dataset_rows.dataset_id → datasets.id        ON DELETE CASCADE
 ```
 
-**MongoDB Atlas (free tier)**
+The complete DDL, with comments explaining each design decision, is in
+[`backend/database/schema.sql`](backend/database/schema.sql).
 
-1. Create a free M0 cluster.
-2. Database Access → add a user with read/write permissions.
-3. Network Access → allow `0.0.0.0/0` (or your host's IPs).
-4. Copy the connection string into `MONGODB_URI`, appending the database name:
-   `mongodb+srv://<user>:<password>@<cluster>.mongodb.net/vasudha_datavis?retryWrites=true&w=majority`
+### Local MySQL
+
+```bash
+# Ubuntu / Debian
+sudo apt install mysql-server
+sudo systemctl start mysql
+
+# macOS
+brew install mysql && brew services start mysql
+
+# Windows: install MySQL Community Server from dev.mysql.com and start the service
+```
+
+Create the database and a dedicated user:
+
+```sql
+CREATE DATABASE vasudha_datavis CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER 'vasudha'@'localhost' IDENTIFIED BY 'choose_a_password';
+GRANT ALL PRIVILEGES ON vasudha_datavis.* TO 'vasudha'@'localhost';
+FLUSH PRIVILEGES;
+```
+
+Run that with `sudo mysql` (Linux) or `mysql -u root -p`. Then fill in `backend/.env`:
+
+```
+DB_HOST=127.0.0.1
+DB_PORT=3306
+DB_NAME=vasudha_datavis
+DB_USER=vasudha
+DB_PASSWORD=choose_a_password
+DB_SSL=false
+```
+
+### Hosted MySQL
+
+| Provider | Free tier | Notes |
+| --- | --- | --- |
+| **Aiven for MySQL** | 1 GB RAM, 1 GB storage, 76 connections, no credit card, no time limit | Recommended. Requires TLS: set `DB_SSL=true` and paste the CA certificate from the Aiven console into `DB_SSL_CA`. Idle free services are powered off and can be reactivated from the console. |
+| Railway | Trial credits | Simple if the backend is hosted there too |
+| Clever Cloud | Small free MySQL add-on | Enough for this dataset volume |
+| TiDB Cloud Starter | MySQL wire-compatible serverless | Works through the same `mysql2` driver |
+
+Whichever you choose, either set `DATABASE_URL` to the connection string the provider gives you, or
+fill in the individual `DB_*` values.
+
+### Creating the tables
+
+Three options, in order of convenience:
+
+```bash
+# 1. Automatic — the app creates missing tables on boot when DB_SYNC=true (the default)
+npm start
+
+# 2. Explicit — create the tables and exit
+npm run db:sync
+
+# 3. By hand — apply the SQL file (useful if the app's user may not create tables)
+mysql -u vasudha -p vasudha_datavis < backend/database/schema.sql
+```
+
+`npm run db:sync -- --force` drops and recreates every table. It is destructive; use it only on a
+throwaway development database.
 
 ### Seeding
 
@@ -291,11 +414,11 @@ Useful scripts:
 | --- | --- | --- |
 | `npm run dev` | backend | Starts the API with file watching |
 | `npm start` | backend | Starts the API (production entry point) |
+| `npm run db:sync` | backend | Creates any missing tables, then exits |
 | `npm run seed` / `seed:demo` | backend | Seeds the database |
 | `npm run dev` | frontend | Vite dev server |
 | `npm run build` | frontend | Production build into `dist/` |
 | `npm run preview` | frontend | Serves the production build locally |
-
 ---
 
 ## 9. Default credentials
@@ -471,9 +594,18 @@ Base URL: `<backend>/api`. Authenticated requests send `Authorization: Bearer <t
 
 ## 13. Deployment
 
-The frontend and backend deploy independently.
+Three pieces deploy independently: the MySQL database, the backend API, and the frontend.
 
-### Backend → Render (free tier)
+### Step 1 — MySQL database
+
+Create a free MySQL instance (see §7 for the provider comparison; **Aiven** is the recommended
+option — 1 GB, no credit card, no time limit). Note down the host, port, database name, user and
+password, and download the CA certificate if the provider offers one.
+
+The tables are created automatically the first time the backend boots, so there is nothing to run
+here by hand.
+
+### Step 2 — Backend → Render (free tier)
 
 1. Push this repository to GitHub.
 2. Render → **New → Web Service**, select the repo.
@@ -481,14 +613,31 @@ The frontend and backend deploy independently.
    - Build command: `npm ci`
    - Start command: `npm start`
    - Health check path: `/api/health`
-3. Add environment variables: `NODE_ENV=production`, `MONGODB_URI`, `JWT_SECRET`,
-   `CORS_ORIGINS=https://<your-frontend-domain>`, `FRONTEND_URL=https://<your-frontend-domain>`.
-4. Deploy. On first boot the default Super Admin is created automatically.
+3. Add environment variables:
+
+   ```
+   NODE_ENV=production
+   JWT_SECRET=<output of: openssl rand -hex 48>
+   DB_HOST=<from your MySQL provider>
+   DB_PORT=<from your MySQL provider>
+   DB_NAME=<from your MySQL provider>
+   DB_USER=<from your MySQL provider>
+   DB_PASSWORD=<from your MySQL provider>
+   DB_SSL=true
+   DB_SSL_CA=<paste the provider's CA certificate, or leave empty>
+   CORS_ORIGINS=https://<your-frontend-domain>
+   FRONTEND_URL=https://<your-frontend-domain>
+   ```
+
+   Providers that hand out a single connection string can use `DATABASE_URL` instead of the five
+   `DB_*` values.
+4. Deploy. The logs should show `MySQL connected`, `Database schema verified` and
+   `Super Admin created` on the first boot.
 
 A `render.yaml` blueprint is included — Render → **New → Blueprint** picks it up and only asks for
 the environment-specific values.
 
-### Frontend → Vercel (free tier)
+### Step 3 — Frontend → Vercel (free tier)
 
 1. Vercel → **New Project**, select the repo.
    - Root directory: `frontend`
@@ -499,27 +648,38 @@ the environment-specific values.
 
 Netlify works identically — `public/_redirects` provides the same SPA fallback.
 
-### After deploying
+### Step 4 — Connect them
 
-Set `CORS_ORIGINS` on the backend to the exact frontend origin (scheme + host, no trailing slash)
-and redeploy the backend. A missing origin here is the usual cause of "Unable to reach the server".
+Set `CORS_ORIGINS` on the backend to the exact frontend origin (scheme + host, **no trailing
+slash**) and redeploy the backend. A missing or mismatched origin here is the usual cause of
+"Unable to reach the server" on an otherwise healthy deployment.
+
+Verify with:
+
+```bash
+curl https://<your-backend-domain>/api/health
+curl https://<your-backend-domain>/api/public/visualisations
+```
 
 > **Free-tier note:** Render's free web services sleep after inactivity, so the first request after
-> an idle period can take 30–60 seconds while the service wakes up.
-
+> an idle period can take 30–60 seconds while the service wakes up. Aiven powers off free database
+> instances that go unused; they can be reactivated from the console in a few seconds.
 ---
 
 ## 14. Testing
 
 Verification was done with two automated suites plus manual browser checks.
 
-**API suite** — 47 assertions over the whole workflow: authentication and account-enumeration
+**API suite** — 48 assertions over the whole workflow: authentication and account-enumeration
 resistance, RBAC (Admin cannot list admins, cannot approve their own dataset), CSV validation
 (missing columns, out-of-range latitude, non-numeric values, unknown/duplicate states, missing
 time-series variant, non-CSV uploads), header aliasing and extra-column preservation, the
 pending → reject → approve transitions, publish ordering, public-payload scoping, dataset
 ownership, edit-returns-to-pending, account enable/disable, the delete guard, and the full
-forgot/reset-password cycle including single-use tokens.
+forgot/reset-password cycle including single-use tokens. Database behaviour was verified directly
+against MySQL as well: the `ON DELETE CASCADE` on `dataset_rows` leaves no orphans, the
+`ON DELETE RESTRICT` on `datasets.created_by_id` blocks deleting an Admin who owns datasets, and
+`database/schema.sql` applies cleanly to an empty database.
 
 **Browser suite** — 17 assertions driving the real UI: sign-in, local CSV preview, malformed-upload
 error reporting, a successful upload with aliased headers, absence from the public site while
@@ -554,9 +714,15 @@ There is no unit-test harness in the repository — see the limitations below.
   described above; adding Vitest/Jest coverage for `csvParser` and the approval service would be
   the first thing to add next.
 - **No Figma prototype.** The UI was designed directly in code.
-- **Rows are stored inline in the dataset document.** MongoDB's 16 MB document limit therefore caps
-  a dataset at roughly 100k simple rows; `MAX_DATASET_ROWS` defaults to a conservative 20 000. A
-  separate rows collection or GridFS would be the fix for genuinely large datasets.
+- **Row values are stored in a `JSON` column** rather than in typed columns, because each chart type
+  has a different set of fields. The trade-off is that the database cannot enforce types inside a
+  row or index individual fields — validation happens in `csvParser.js` before anything is written.
+  A dataset is capped at `MAX_DATASET_ROWS` (default 20 000) to keep uploads and page loads
+  predictable; the storage itself would handle far more.
+- **Schema creation uses `sequelize.sync()`, not versioned migrations.** That is fine for a fresh
+  deployment and keeps setup to one step, but a production system with evolving requirements would
+  want Umzug or `sequelize-cli` migrations. `database/schema.sql` is the reviewable source of truth
+  in the meantime, and `alter` is deliberately never used.
 - **JWTs are stateless and stored in `localStorage`.** There is no server-side revocation list, so
   disabling an account is enforced on the *next* request rather than instantly invalidating an
   issued token (the `requireAuth` middleware re-checks `isActive` on every request, so the practical
@@ -567,6 +733,9 @@ There is no unit-test harness in the repository — see the limitations below.
   logged and never block the underlying action.
 - **The public feed is unpaginated.** All approved datasets load at once; this is fine at the
   expected scale but would need pagination or lazy loading past a few dozen visualisations.
+- **The whole public feed is loaded in two queries** (datasets, then their rows). That is
+  deliberate — it avoids an N+1 — but a very large number of published datasets would need
+  pagination rather than a bigger query.
 - **The GeoJSON is a ~240 KB static asset** served from the frontend. It is fetched once and cached
   in memory for the session, but the first heatmap on a cold load pays that download.
 - **Chart type cannot be changed without re-uploading a CSV**, because the stored rows have the

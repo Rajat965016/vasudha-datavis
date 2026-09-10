@@ -50,6 +50,10 @@ export const env = {
     password: read('DB_PASSWORD', ''),
     ssl: toBoolean(read('DB_SSL', 'false')),
     sslRejectUnauthorized: toBoolean(read('DB_SSL_REJECT_UNAUTHORIZED', 'true'), true),
+    // PEM contents of the provider's CA certificate. Providers such as Aiven
+    // sign with their own CA, so supplying it here keeps certificate
+    // verification switched on.
+    sslCa: read('DB_SSL_CA', '').replace(/\\n/g, '\n'),
     poolMax: toNumber(read('DB_POOL_MAX', 10), 10),
     poolMin: toNumber(read('DB_POOL_MIN', 0), 0),
     logging: toBoolean(read('DB_LOGGING', 'false')),

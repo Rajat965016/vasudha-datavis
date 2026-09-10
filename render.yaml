@@ -1,8 +1,12 @@
 # Render Blueprint — deploys the backend API as a Web Service.
 #
 # Usage: push this repository to GitHub, then in Render choose
-# "New → Blueprint" and point it at the repo. Set MONGODB_URI and
-# CORS_ORIGINS in the dashboard once the frontend URL is known.
+# "New → Blueprint" and point it at the repo. The values marked `sync: false`
+# are asked for in the dashboard, because they differ per environment.
+#
+# The MySQL database is NOT created here — Render does not offer managed MySQL.
+# Create one on Aiven (free, no credit card) or another provider first, then
+# supply its connection details below. See README §7 and §13.
 services:
   - type: web
     name: vasudha-datavis-api
@@ -28,14 +32,38 @@ services:
         value: superadmin@vasudhaindia.org
       - key: SUPER_ADMIN_PASSWORD
         value: Admin@123
-      # Set these in the Render dashboard — they are environment specific.
-      - key: MONGODB_URI
+      # Tables are created on first boot.
+      - key: DB_SYNC
+        value: "true"
+      # Nearly every hosted MySQL requires TLS.
+      - key: DB_SSL
+        value: "true"
+
+      # --- MySQL connection -------------------------------------------------
+      # Either set DATABASE_URL, or the five DB_* values below it.
+      - key: DATABASE_URL
         sync: false
+      - key: DB_HOST
+        sync: false
+      - key: DB_PORT
+        sync: false
+      - key: DB_NAME
+        sync: false
+      - key: DB_USER
+        sync: false
+      - key: DB_PASSWORD
+        sync: false
+      # PEM contents of the provider's CA certificate (Aiven publishes one).
+      - key: DB_SSL_CA
+        sync: false
+
+      # --- Frontend origin --------------------------------------------------
       - key: CORS_ORIGINS
         sync: false
       - key: FRONTEND_URL
         sync: false
-      # Optional SMTP settings for the email bonus features.
+
+      # --- Optional SMTP for the email bonus features -----------------------
       - key: SMTP_HOST
         sync: false
       - key: SMTP_PORT

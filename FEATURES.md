@@ -128,8 +128,8 @@ Legend: ✅ implemented · ⭐ bonus / additional feature
 | --- | --- | --- |
 | React frontend | ✅ | React 18 + Vite |
 | Node.js / Express backend | ✅ | Express 4, ES modules |
-| SQL or NoSQL database | ✅ | MongoDB + Mongoose |
-| Deployed and publicly accessible | ✅ | `render.yaml` for the API, `vercel.json` for the frontend |
+| SQL or NoSQL database | ✅ | **MySQL 8** + Sequelize, with real foreign keys, transactions and a reviewable `schema.sql` |
+| Deployed and publicly accessible | ✅ | `render.yaml` for the API, `vercel.json` for the frontend, free managed MySQL |
 | Clean, modular, component-based, reusable code | ✅ | Controllers → services → models; a shared UI kit; a single `ChartRenderer` |
 | Meaningful naming, proper folder structure | ✅ | See the structure section of the README |
 | Proper error handling | ✅ | `ApiError` + one central handler; `ErrorBoundary`, loading/error/empty states in the UI |
@@ -167,6 +167,9 @@ Legend: ✅ implemented · ⭐ bonus / additional feature
 | Category-coloured map markers with a legend | Driven by an optional `category` column |
 | Value-scaled marker radii | Magnitude is readable without clicking |
 | Security hardening | Helmet, CORS allow-list, compression, rate-limited auth routes, bcrypt, account-enumeration-resistant responses, JWT re-validated against live account state on every request |
+| Referential integrity in the database | `ON DELETE CASCADE` for dataset rows, `ON DELETE RESTRICT` protecting authorship, `SET NULL` for reviewers |
+| Transactional writes | A dataset and its rows are inserted together; publish-sequence allocation locks a counter row so two approvals cannot collide |
+| Reviewable SQL schema | `backend/database/schema.sql` documents every table, index and constraint |
 | Graceful shutdown | SIGTERM/SIGINT handling for clean redeploys |
 | Health check endpoint | `/api/health`, wired into the Render blueprint |
 | Code-split map and chart bundles | Leaflet and Recharts load only when a visualisation needs them |

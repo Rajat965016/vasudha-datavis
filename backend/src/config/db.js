@@ -8,7 +8,12 @@ const dialectOptions = {
   // database happens to be hosted.
   dateStrings: false,
   ...(env.db.ssl
-    ? { ssl: { rejectUnauthorized: env.db.sslRejectUnauthorized } }
+    ? {
+        ssl: {
+          rejectUnauthorized: env.db.sslRejectUnauthorized,
+          ...(env.db.sslCa ? { ca: env.db.sslCa } : {}),
+        },
+      }
     : {}),
 };
 
