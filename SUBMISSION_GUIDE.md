@@ -85,7 +85,7 @@ different states, and it rendered correctly.
 | Requirement | Status |
 | --- | --- |
 | Public GitHub repository with the full source | You push it — see Part C |
-| Meaningful commits, not one big commit | ✅ 26 feature-scoped commits already in the history |
+| Meaningful commits, not one big commit | ✅ 27 feature-scoped commits already in the history |
 | List of implemented features | ✅ [`FEATURES.md`](FEATURES.md) |
 | Detailed `README.md` | ✅ [`README.md`](README.md) |
 | Deployed, publicly accessible URL | You deploy it — see Part D |
