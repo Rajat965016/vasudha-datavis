@@ -85,14 +85,14 @@ edited dataset keeps its original position rather than reshuffling the page.
 **Backend**
 
 - Node.js 18+ / Express 4 (ES modules)
-- **MySQL 8** + Sequelize 6 (`mysql2` driver)
+- **PostgreSQL 14+** + Sequelize 6 (`pg` driver)
 - JWT authentication (`jsonwebtoken`) with bcrypt password hashing
 - Zod request validation
 - PapaParse CSV parsing, Multer in-memory uploads
 - Helmet, CORS, compression, express-rate-limit
 - Nodemailer (optional — bonus email features)
 
-**Database:** MySQL 8 (relational), accessed through Sequelize.
+**Database:** PostgreSQL (relational), accessed through Sequelize.
 
 Four tables — `users`, `datasets`, `dataset_rows`, `counters` — with real foreign keys:
 
@@ -116,12 +116,12 @@ set of columns per chart type without a migration every time a new dataset shape
 vasudha-datavis/
 ├── backend/
 │   ├── database/
-│   │   └── schema.sql               # reviewable MySQL DDL (optional to run)
+│   │   └── schema.sql               # reviewable PostgreSQL DDL (optional to run)
 │   ├── samples/                     # the three sample CSVs from the Resources folder
 │   └── src/
 │       ├── config/
 │       │   ├── constants.js         # roles, domains, chart types, statuses
-│       │   ├── db.js                # Sequelize / MySQL connection
+│       │   ├── db.js                # Sequelize / PostgreSQL connection
 │       │   ├── env.js               # typed, validated environment config
 │       │   └── indiaStates.js       # canonical state names + alias resolution
 │       ├── controllers/             # HTTP layer only
@@ -181,15 +181,15 @@ vasudha-datavis/
 ## 4. Dependencies
 
 Everything installs from npm; there is nothing to install globally except Node.js and (for local
-development) MySQL.
+development) PostgreSQL.
 
 | Requirement | Version |
 | --- | --- |
 | Node.js | 18 or newer |
 | npm | 9 or newer |
-| MySQL | 8.0 or newer (MariaDB 10.5+ also works) |
+| PostgreSQL | 14.0 or newer |
 
-Backend runtime dependencies: `express`, `sequelize`, `mysql2`, `bcryptjs`, `jsonwebtoken`, `zod`,
+Backend runtime dependencies: `express`, `sequelize`, `pg`, `pg-hstore`, `bcryptjs`, `jsonwebtoken`, `zod`,
 `papaparse`, `multer`, `nodemailer`, `helmet`, `cors`, `compression`, `morgan`,
 `express-rate-limit`, `dotenv`.
 
@@ -230,19 +230,19 @@ cp .env.example .env
 | `CORS_ORIGINS` | no | `http://localhost:5173` | Comma-separated allowed origins |
 | `FRONTEND_URL` | no | `http://localhost:5173` | Used to build links inside emails |
 
-**MySQL**
+**PostgreSQL**
 
 | Variable | Required | Default | Purpose |
 | --- | --- | --- | --- |
-| `DATABASE_URL` | no | — | Full connection string, e.g. `mysql://user:pass@host:3306/vasudha_datavis`. **Takes priority over the individual settings below.** |
+| `DATABASE_URL` | no | — | Full connection string, e.g. `postgresql://user:pass@host:5432/vasudha_datavis`. **Takes priority over the individual settings below.** |
 | `DB_HOST` | yes* | `127.0.0.1` | Database host |
-| `DB_PORT` | no | `3306` | Database port |
+| `DB_PORT` | no | `5432` | Database port |
 | `DB_NAME` | yes* | `vasudha_datavis` | Database name |
-| `DB_USER` | yes* | `root` | Database user |
+| `DB_USER` | yes* | `postgres` | Database user |
 | `DB_PASSWORD` | yes* | empty | Database password |
-| `DB_SSL` | no | `false` | Set `true` for a cloud MySQL host — nearly all require TLS |
-| `DB_SSL_CA` | no | empty | PEM contents of the provider's CA certificate (Aiven and similar) |
-| `DB_SSL_REJECT_UNAUTHORIZED` | no | `true` | Last resort for a certificate that cannot be verified |
+| `DB_SSL` | no | `false` | Set `true` for a cloud PostgreSQL host (e.g. Render) |
+| `DB_SSL_CA` | no | empty | PEM contents of the provider's CA certificate |
+| `DB_SSL_REJECT_UNAUTHORIZED` | no | `true` | Set `false` for cloud providers requiring self-signed/internal TLS |
 | `DB_POOL_MAX` / `DB_POOL_MIN` | no | `10` / `0` | Connection pool size |
 | `DB_LOGGING` | no | `false` | Log every SQL statement (development only) |
 | `DB_SYNC` | no | `true` | Create missing tables on boot |
@@ -313,47 +313,46 @@ dataset_rows.dataset_id → datasets.id        ON DELETE CASCADE
 The complete DDL, with comments explaining each design decision, is in
 [`backend/database/schema.sql`](backend/database/schema.sql).
 
-### Local MySQL
+### Local PostgreSQL
 
 ```bash
 # Ubuntu / Debian
-sudo apt install mysql-server
-sudo systemctl start mysql
+sudo apt install postgresql postgresql-contrib
+sudo systemctl start postgresql
 
 # macOS
-brew install mysql && brew services start mysql
+brew install postgresql@14 && brew services start postgresql@14
 
-# Windows: install MySQL Community Server from dev.mysql.com and start the service
+# Windows: install PostgreSQL from postgresql.org and start the service
 ```
 
 Create the database and a dedicated user:
 
 ```sql
-CREATE DATABASE vasudha_datavis CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-CREATE USER 'vasudha'@'localhost' IDENTIFIED BY 'choose_a_password';
-GRANT ALL PRIVILEGES ON vasudha_datavis.* TO 'vasudha'@'localhost';
-FLUSH PRIVILEGES;
+CREATE DATABASE vasudha_datavis;
+CREATE USER vasudha WITH ENCRYPTED PASSWORD 'choose_a_password';
+GRANT ALL PRIVILEGES ON DATABASE vasudha_datavis TO vasudha;
 ```
 
-Run that with `sudo mysql` (Linux) or `mysql -u root -p`. Then fill in `backend/.env`:
+Then fill in `backend/.env`:
 
 ```
 DB_HOST=127.0.0.1
-DB_PORT=3306
+DB_PORT=5432
 DB_NAME=vasudha_datavis
 DB_USER=vasudha
 DB_PASSWORD=choose_a_password
 DB_SSL=false
 ```
 
-### Hosted MySQL
+### Hosted PostgreSQL
 
 | Provider | Free tier | Notes |
 | --- | --- | --- |
-| **Aiven for MySQL** | 1 GB RAM, 1 GB storage, 76 connections, no credit card, no time limit | Recommended. Requires TLS: set `DB_SSL=true` and paste the CA certificate from the Aiven console into `DB_SSL_CA`. Idle free services are powered off and can be reactivated from the console. |
-| Railway | Trial credits | Simple if the backend is hosted there too |
-| Clever Cloud | Small free MySQL add-on | Enough for this dataset volume |
-| TiDB Cloud Starter | MySQL wire-compatible serverless | Works through the same `mysql2` driver |
+| **Render PostgreSQL** | 1 GB storage, free tier | Recommended. Requires TLS: set `DB_SSL=true` and `DB_SSL_REJECT_UNAUTHORIZED=false`. |
+| Supabase | Free tier PostgreSQL | Works with standard PostgreSQL connection string |
+| Neon | Serverless PostgreSQL | Set `DATABASE_URL` with SSL enabled |
+| Aiven for PostgreSQL | Free tier | Works through the same `pg` driver |
 
 Whichever you choose, either set `DATABASE_URL` to the connection string the provider gives you, or
 fill in the individual `DB_*` values.
@@ -370,7 +369,7 @@ npm start
 npm run db:sync
 
 # 3. By hand — apply the SQL file (useful if the app's user may not create tables)
-mysql -u vasudha -p vasudha_datavis < backend/database/schema.sql
+psql "<DATABASE_URL>" -f backend/database/schema.sql
 ```
 
 `npm run db:sync -- --force` drops and recreates every table. It is destructive; use it only on a
@@ -594,13 +593,11 @@ Base URL: `<backend>/api`. Authenticated requests send `Authorization: Bearer <t
 
 ## 13. Deployment
 
-Three pieces deploy independently: the MySQL database, the backend API, and the frontend.
+Three pieces deploy independently: the PostgreSQL database, the backend API, and the frontend.
 
-### Step 1 — MySQL database
+### Step 1 — PostgreSQL database
 
-Create a free MySQL instance (see §7 for the provider comparison; **Aiven** is the recommended
-option — 1 GB, no credit card, no time limit). Note down the host, port, database name, user and
-password, and download the CA certificate if the provider offers one.
+Create a free PostgreSQL instance (see §7 for the provider comparison; **Render PostgreSQL** or Supabase is recommended). Note down the `DATABASE_URL` or the host, port, database name, user and password.
 
 The tables are created automatically the first time the backend boots, so there is nothing to run
 here by hand.
@@ -618,21 +615,15 @@ here by hand.
    ```
    NODE_ENV=production
    JWT_SECRET=<output of: openssl rand -hex 48>
-   DB_HOST=<from your MySQL provider>
-   DB_PORT=<from your MySQL provider>
-   DB_NAME=<from your MySQL provider>
-   DB_USER=<from your MySQL provider>
-   DB_PASSWORD=<from your MySQL provider>
+   DATABASE_URL=<your-postgresql-connection-string>
    DB_SSL=true
-   DB_SSL_CA=<paste the provider's CA certificate, or leave empty>
+   DB_SSL_REJECT_UNAUTHORIZED=false
    CORS_ORIGINS=https://<your-frontend-domain>
    FRONTEND_URL=https://<your-frontend-domain>
    ```
 
-   Providers that hand out a single connection string can use `DATABASE_URL` instead of the five
-   `DB_*` values.
-4. Deploy. The logs should show `MySQL connected`, `Database schema verified` and
-   `Super Admin created` on the first boot.
+4. Deploy. The logs should show `PostgreSQL connected`, `Database schema verified` and
+   `Super Admin present` on boot.
 
 A `render.yaml` blueprint is included — Render → **New → Blueprint** picks it up and only asks for
 the environment-specific values.

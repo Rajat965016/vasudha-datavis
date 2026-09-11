@@ -128,8 +128,8 @@ Legend: ✅ implemented · ⭐ bonus / additional feature
 | --- | --- | --- |
 | React frontend | ✅ | React 18 + Vite |
 | Node.js / Express backend | ✅ | Express 4, ES modules |
-| SQL or NoSQL database | ✅ | **MySQL 8** + Sequelize, with real foreign keys, transactions and a reviewable `schema.sql` |
-| Deployed and publicly accessible | ✅ | `render.yaml` for the API, `vercel.json` for the frontend, free managed MySQL |
+| SQL or NoSQL database | ✅ | **PostgreSQL 14+** + Sequelize, with real foreign keys, transactions and a reviewable `schema.sql` |
+| Deployed and publicly accessible | ✅ | `render.yaml` for the API, `vercel.json` for the frontend, hosted PostgreSQL on Render |
 | Clean, modular, component-based, reusable code | ✅ | Controllers → services → models; a shared UI kit; a single `ChartRenderer` |
 | Meaningful naming, proper folder structure | ✅ | See the structure section of the README |
 | Proper error handling | ✅ | `ApiError` + one central handler; `ErrorBoundary`, loading/error/empty states in the UI |
