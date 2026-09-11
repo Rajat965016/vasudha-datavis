@@ -3,7 +3,7 @@ import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom';
 
 import AuthShell from './AuthShell.jsx';
 import Button from '@/components/ui/Button.jsx';
-import Field, { TextInput } from '@/components/ui/Field.jsx';
+import Field, { PasswordInput, TextInput } from '@/components/ui/Field.jsx';
 import { useAuth } from '@/context/AuthContext.jsx';
 import { LoadingState } from '@/components/ui/States.jsx';
 
@@ -69,10 +69,9 @@ const LoginPage = () => {
         </Field>
 
         <Field label="Password" htmlFor="password" required>
-          <TextInput
+          <PasswordInput
             id="password"
             name="password"
-            type="password"
             autoComplete="current-password"
             required
             value={form.password}

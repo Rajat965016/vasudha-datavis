@@ -3,7 +3,7 @@ import { useState } from 'react';
 import PageHeader from '@/components/admin/PageHeader.jsx';
 import Button from '@/components/ui/Button.jsx';
 import Modal from '@/components/ui/Modal.jsx';
-import Field, { TextInput } from '@/components/ui/Field.jsx';
+import Field, { EyeIcon, EyeSlashIcon, PasswordInput, TextInput } from '@/components/ui/Field.jsx';
 import { EmptyState, ErrorState, LoadingState } from '@/components/ui/States.jsx';
 import { adminApi } from '@/api/services.js';
 import { toApiError } from '@/api/client.js';
@@ -15,31 +15,46 @@ import { PASSWORD_HINT, validatePassword } from '@/utils/password.js';
 const BLANK_ADMIN = { name: '', email: '', password: '', sendCredentialsEmail: true };
 
 /** Shown once after creation when credentials could not be emailed. */
-const CredentialsNotice = ({ credentials, onDismiss }) => (
-  <div className="mb-5 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-    <p className="font-semibold">Share these credentials securely</p>
-    <p className="mt-1 text-xs">
-      Email delivery is not configured on this server, so the temporary password is shown here once.
-    </p>
-    <dl className="mt-3 grid gap-1 text-xs sm:grid-cols-2">
-      <div>
-        <dt className="text-amber-700">Email</dt>
-        <dd className="font-mono font-semibold">{credentials.email}</dd>
-      </div>
-      <div>
-        <dt className="text-amber-700">Temporary password</dt>
-        <dd className="font-mono font-semibold">{credentials.password}</dd>
-      </div>
-    </dl>
-    <button
-      type="button"
-      onClick={onDismiss}
-      className="mt-3 text-xs font-semibold text-amber-800 underline"
-    >
-      Dismiss
-    </button>
-  </div>
-);
+const CredentialsNotice = ({ credentials, onDismiss }) => {
+  const [showPassword, setShowPassword] = useState(false);
+
+  return (
+    <div className="mb-5 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+      <p className="font-semibold">Share these credentials securely</p>
+      <p className="mt-1 text-xs">
+        Email delivery is not configured on this server, so the temporary password is shown here once.
+      </p>
+      <dl className="mt-3 grid gap-1 text-xs sm:grid-cols-2">
+        <div>
+          <dt className="text-amber-700">Email</dt>
+          <dd className="font-mono font-semibold">{credentials.email}</dd>
+        </div>
+        <div>
+          <dt className="text-amber-700">Temporary password</dt>
+          <dd className="font-mono font-semibold flex items-center gap-2">
+            <span>{showPassword ? credentials.password : '••••••••••••'}</span>
+            <button
+              type="button"
+              onClick={() => setShowPassword((prev) => !prev)}
+              className="text-amber-700 hover:text-amber-950 focus:outline-none"
+              title={showPassword ? 'Hide password' : 'Show password'}
+              aria-label={showPassword ? 'Hide password' : 'Show password'}
+            >
+              {showPassword ? <EyeSlashIcon className="w-4 h-4" /> : <EyeIcon className="w-4 h-4" />}
+            </button>
+          </dd>
+        </div>
+      </dl>
+      <button
+        type="button"
+        onClick={onDismiss}
+        className="mt-3 text-xs font-semibold text-amber-800 underline"
+      >
+        Dismiss
+      </button>
+    </div>
+  );
+};
 
 const UserManagementPage = () => {
   const toast = useToast();
@@ -304,10 +319,9 @@ const UserManagementPage = () => {
             htmlFor="adminPassword"
             hint={`Leave empty to generate a strong password automatically. ${PASSWORD_HINT}`}
           >
-            <TextInput
+            <PasswordInput
               id="adminPassword"
               name="password"
-              type="text"
               autoComplete="off"
               value={form.password}
               onChange={handleChange}

@@ -31,7 +31,7 @@ Counter.init(
       primaryKey: true,
     },
     value: {
-      type: DataTypes.INTEGER.UNSIGNED,
+      type: DataTypes.INTEGER,
       allowNull: false,
       defaultValue: 0,
     },

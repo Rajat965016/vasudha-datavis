@@ -4,9 +4,8 @@
 # "New → Blueprint" and point it at the repo. The values marked `sync: false`
 # are asked for in the dashboard, because they differ per environment.
 #
-# The MySQL database is NOT created here — Render does not offer managed MySQL.
-# Create one on Aiven (free, no credit card) or another provider first, then
-# supply its connection details below. See README §7 and §13.
+# The PostgreSQL database can be created on Render (New → PostgreSQL) or another provider,
+# then supply its connection details below. See README.
 services:
   - type: web
     name: vasudha-datavis-api
@@ -35,11 +34,11 @@ services:
       # Tables are created on first boot.
       - key: DB_SYNC
         value: "true"
-      # Nearly every hosted MySQL requires TLS.
+      # Cloud PostgreSQL hosts like Render require TLS.
       - key: DB_SSL
         value: "true"
 
-      # --- MySQL connection -------------------------------------------------
+      # --- PostgreSQL connection --------------------------------------------
       # Either set DATABASE_URL, or the five DB_* values below it.
       - key: DATABASE_URL
         sync: false

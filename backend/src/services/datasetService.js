@@ -92,7 +92,7 @@ export const buildAdminListFilter = ({ user, query }) => {
   if (query.status) where.status = query.status;
   if (query.domain) where.domain = query.domain;
   if (query.chartType) where.chartType = query.chartType;
-  if (query.search) where.title = { [Op.like]: `%${escapeLike(query.search)}%` };
+  if (query.search) where.title = { [Op.iLike]: `%${escapeLike(query.search)}%` };
 
   return where;
 };

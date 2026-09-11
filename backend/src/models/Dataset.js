@@ -51,7 +51,7 @@ class Dataset extends Model {
 Dataset.init(
   {
     id: {
-      type: DataTypes.INTEGER.UNSIGNED,
+      type: DataTypes.INTEGER,
       autoIncrement: true,
       primaryKey: true,
     },
@@ -96,7 +96,7 @@ Dataset.init(
       get: jsonGetter('columns', []),
     },
     rowCount: {
-      type: DataTypes.INTEGER.UNSIGNED,
+      type: DataTypes.INTEGER,
       allowNull: false,
       defaultValue: 0,
     },
@@ -115,9 +115,9 @@ Dataset.init(
       allowNull: false,
       defaultValue: '',
     },
-    createdById: { type: DataTypes.INTEGER.UNSIGNED, allowNull: false },
-    updatedById: { type: DataTypes.INTEGER.UNSIGNED, allowNull: true },
-    reviewedById: { type: DataTypes.INTEGER.UNSIGNED, allowNull: true },
+    createdById: { type: DataTypes.INTEGER, allowNull: false },
+    updatedById: { type: DataTypes.INTEGER, allowNull: true },
+    reviewedById: { type: DataTypes.INTEGER, allowNull: true },
     reviewedAt: { type: DataTypes.DATE, allowNull: true },
     publishedAt: { type: DataTypes.DATE, allowNull: true },
     /**
@@ -126,7 +126,7 @@ Dataset.init(
      * exact sequence they were approved.
      */
     publishSequence: {
-      type: DataTypes.INTEGER.UNSIGNED,
+      type: DataTypes.INTEGER,
       allowNull: true,
       unique: true,
     },

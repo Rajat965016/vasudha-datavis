@@ -3,7 +3,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 
 import AuthShell from './AuthShell.jsx';
 import Button from '@/components/ui/Button.jsx';
-import Field, { TextInput } from '@/components/ui/Field.jsx';
+import Field, { PasswordInput, TextInput } from '@/components/ui/Field.jsx';
 import { authApi } from '@/api/services.js';
 import { toApiError } from '@/api/client.js';
 import { useToast } from '@/context/ToastContext.jsx';
@@ -81,10 +81,9 @@ const ResetPasswordPage = () => {
         )}
 
         <Field label="New password" htmlFor="password" required hint={PASSWORD_HINT}>
-          <TextInput
+          <PasswordInput
             id="password"
             name="password"
-            type="password"
             autoComplete="new-password"
             required
             value={form.password}
@@ -93,10 +92,9 @@ const ResetPasswordPage = () => {
         </Field>
 
         <Field label="Confirm new password" htmlFor="confirmPassword" required>
-          <TextInput
+          <PasswordInput
             id="confirmPassword"
             name="confirmPassword"
-            type="password"
             autoComplete="new-password"
             required
             value={form.confirmPassword}

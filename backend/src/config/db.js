@@ -3,13 +3,16 @@ import { Sequelize } from 'sequelize';
 import env from './env.js';
 import logger from '../utils/logger.js';
 
+const isCloudHost =
+  Boolean(env.db.url) &&
+  (env.db.url.includes('render.com') || env.db.url.includes('sslmode=require'));
+const useSsl = env.db.ssl || isCloudHost;
+
 const dialectOptions = {
-  // Store and read timestamps in UTC so behaviour is identical wherever the
-  // database happens to be hosted.
-  dateStrings: false,
-  ...(env.db.ssl
+  ...(useSsl
     ? {
         ssl: {
+          require: true,
           rejectUnauthorized: env.db.sslRejectUnauthorized,
           ...(env.db.sslCa ? { ca: env.db.sslCa } : {}),
         },
@@ -18,7 +21,7 @@ const dialectOptions = {
 };
 
 const commonOptions = {
-  dialect: 'mysql',
+  dialect: 'postgres',
   timezone: '+00:00',
   dialectOptions,
   logging: env.db.logging ? (sql) => logger.info(sql) : false,
@@ -29,17 +32,15 @@ const commonOptions = {
     idle: 10000,
   },
   define: {
-    // snake_case columns in MySQL, camelCase attributes in JavaScript.
+    // snake_case columns in the database, camelCase attributes in JavaScript.
     underscored: true,
     freezeTableName: false,
-    charset: 'utf8mb4',
-    collate: 'utf8mb4_unicode_ci',
   },
 };
 
 /**
  * A single shared Sequelize instance. `DATABASE_URL` is preferred because most
- * managed MySQL providers hand out one connection string.
+ * managed PostgreSQL providers hand out one connection string.
  */
 export const sequelize = env.db.url
   ? new Sequelize(env.db.url, commonOptions)
@@ -51,13 +52,13 @@ export const sequelize = env.db.url
 
 export const connectDatabase = async () => {
   await sequelize.authenticate();
-  logger.info(`MySQL connected → ${sequelize.getDatabaseName()}`);
+  logger.info(`PostgreSQL connected → ${sequelize.getDatabaseName()}`);
   return sequelize;
 };
 
 export const disconnectDatabase = async () => {
   await sequelize.close();
-  logger.info('MySQL connection closed');
+  logger.info('PostgreSQL connection closed');
 };
 
 export default sequelize;

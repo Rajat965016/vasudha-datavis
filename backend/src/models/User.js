@@ -59,7 +59,7 @@ class User extends Model {
 User.init(
   {
     id: {
-      type: DataTypes.INTEGER.UNSIGNED,
+      type: DataTypes.INTEGER,
       autoIncrement: true,
       primaryKey: true,
     },
@@ -100,7 +100,7 @@ User.init(
       defaultValue: false,
     },
     lastLoginAt: { type: DataTypes.DATE, allowNull: true },
-    createdById: { type: DataTypes.INTEGER.UNSIGNED, allowNull: true },
+    createdById: { type: DataTypes.INTEGER, allowNull: true },
     resetPasswordTokenHash: { type: DataTypes.CHAR(64), allowNull: true },
     resetPasswordExpiresAt: { type: DataTypes.DATE, allowNull: true },
   },

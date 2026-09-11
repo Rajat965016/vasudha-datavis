@@ -2,7 +2,7 @@ import { useState } from 'react';
 
 import PageHeader from '@/components/admin/PageHeader.jsx';
 import Button from '@/components/ui/Button.jsx';
-import Field, { TextInput } from '@/components/ui/Field.jsx';
+import Field, { PasswordInput, TextInput } from '@/components/ui/Field.jsx';
 import { ROLES } from '@/config/constants.js';
 import { authApi } from '@/api/services.js';
 import { toApiError } from '@/api/client.js';
@@ -95,10 +95,9 @@ const AccountPage = () => {
             )}
 
             <Field label="Current password" htmlFor="currentPassword" required>
-              <TextInput
+              <PasswordInput
                 id="currentPassword"
                 name="currentPassword"
-                type="password"
                 autoComplete="current-password"
                 required
                 value={form.currentPassword}
@@ -107,10 +106,9 @@ const AccountPage = () => {
             </Field>
 
             <Field label="New password" htmlFor="newPassword" required hint={PASSWORD_HINT}>
-              <TextInput
+              <PasswordInput
                 id="newPassword"
                 name="newPassword"
-                type="password"
                 autoComplete="new-password"
                 required
                 value={form.newPassword}
@@ -119,10 +117,9 @@ const AccountPage = () => {
             </Field>
 
             <Field label="Confirm new password" htmlFor="confirmPassword" required>
-              <TextInput
+              <PasswordInput
                 id="confirmPassword"
                 name="confirmPassword"
-                type="password"
                 autoComplete="new-password"
                 required
                 value={form.confirmPassword}

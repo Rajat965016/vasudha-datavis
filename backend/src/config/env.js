@@ -38,15 +38,15 @@ export const env = {
     .filter(Boolean),
 
   /**
-   * MySQL connection. `DATABASE_URL` wins when present, because most hosting
+   * PostgreSQL connection. `DATABASE_URL` wins when present, because most hosting
    * providers hand out a single connection string.
    */
   db: {
     url: read('DATABASE_URL', ''),
     host: read('DB_HOST', '127.0.0.1'),
-    port: toNumber(read('DB_PORT', 3306), 3306),
+    port: toNumber(read('DB_PORT', 5432), 5432),
     name: read('DB_NAME', 'vasudha_datavis'),
-    user: read('DB_USER', 'root'),
+    user: read('DB_USER', 'postgres'),
     password: read('DB_PASSWORD', ''),
     ssl: toBoolean(read('DB_SSL', 'false')),
     sslRejectUnauthorized: toBoolean(read('DB_SSL_REJECT_UNAUTHORIZED', 'true'), true),

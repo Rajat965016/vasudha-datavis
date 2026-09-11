@@ -45,7 +45,7 @@ export const listAdmins = asyncHandler(async (req, res) => {
   const where = { role: ROLES.ADMIN };
   if (search) {
     const safe = `%${String(search).replace(/[%_\\]/g, (m) => `\\${m}`)}%`;
-    where[Op.or] = [{ name: { [Op.like]: safe } }, { email: { [Op.like]: safe } }];
+    where[Op.or] = [{ name: { [Op.iLike]: safe } }, { email: { [Op.iLike]: safe } }];
   }
   if (status === 'active') where.isActive = true;
   if (status === 'disabled') where.isActive = false;
@@ -56,11 +56,11 @@ export const listAdmins = asyncHandler(async (req, res) => {
   const counts = await Dataset.findAll({
     where: { createdById: { [Op.in]: admins.map((admin) => admin.id) } },
     attributes: [
-      'createdById',
+      ['created_by_id', 'createdById'],
       'status',
       [sequelize.fn('COUNT', sequelize.col('id')), 'count'],
     ],
-    group: ['createdById', 'status'],
+    group: ['created_by_id', 'status'],
     raw: true,
   });
 
